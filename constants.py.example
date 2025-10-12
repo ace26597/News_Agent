@@ -1,0 +1,32 @@
+# API Keys and Configuration Constants
+# Copy this file to constants.py and add your actual API keys
+
+# OpenAI API Key for intelligent curation and summarization
+OPENAI_API_KEY = "your-openai-api-key-here"
+
+# Tavily API Key for enhanced web search
+TAVILY_API_KEY = "your-tavily-api-key-here"
+
+# NewsAPI Key for pharmaceutical news
+NEWSAPI_KEY = "your-newsapi-key-here"
+
+# Exa API Key for specialized search
+EXA_API_KEY = "your-exa-api-key-here"
+
+# PubMed Email (required for PubMed API)
+PUBMED_EMAIL = "your-email@example.com"
+
+# Flask Configuration
+SECRET_KEY = "change-this-to-a-random-secret-key"
+FLASK_DEBUG = True
+
+# Search Configuration
+MAX_KEYWORDS = 100
+MAX_RESULTS_PER_SOURCE = 50
+DEFAULT_DATE_RANGE_DAYS = 7
+
+# LLM Configuration
+OPENAI_MODEL = "gpt-4o-mini"  # or "gpt-4", "gpt-3.5-turbo"
+MAX_TOKENS = 3000
+TEMPERATURE = 0.0
+

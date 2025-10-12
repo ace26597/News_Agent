@@ -27,6 +27,7 @@ class Config:
     OPENAI_API_KEY = getattr(constants, 'OPENAI_API_KEY', None) if constants else None
     TAVILY_API_KEY = getattr(constants, 'TAVILY_API_KEY', None) if constants else None
     NEWSAPI_KEY = getattr(constants, 'NEWSAPI_KEY', None) if constants else None
+    EXA_API_KEY = getattr(constants, 'EXA_API_KEY', None) if constants else None
     PUBMED_EMAIL = getattr(constants, 'PUBMED_EMAIL', None) if constants else None
     
     # Search settings
@@ -35,9 +36,9 @@ class Config:
     DEFAULT_DATE_RANGE_DAYS = getattr(constants, 'DEFAULT_DATE_RANGE_DAYS', 7) if constants else 7
     
     # LLM settings for curation
-    OPENAI_MODEL = getattr(constants, 'OPENAI_MODEL', "gpt-3.5-turbo") if constants else "gpt-3.5-turbo"
+    OPENAI_MODEL = getattr(constants, 'OPENAI_MODEL', "gpt-4.1-mini") if constants else "gpt-4.1-mini"
     MAX_TOKENS = getattr(constants, 'MAX_TOKENS', 1000) if constants else 1000
-    TEMPERATURE = getattr(constants, 'TEMPERATURE', 0.3) if constants else 0.3
+    TEMPERATURE = getattr(constants, 'TEMPERATURE', 0.0) if constants else 0.0
     
     # API rate limits and timeouts
     REQUEST_TIMEOUT = 30
@@ -53,8 +54,8 @@ class Config:
             missing_keys.append('OPENAI_API_KEY')
         if not cls.TAVILY_API_KEY:
             missing_keys.append('TAVILY_API_KEY')
-        if not cls.NEWSAPI_KEY:
-            missing_keys.append('NEWSAPI_KEY')
+        if not cls.EXA_API_KEY:
+            missing_keys.append('EXA_API_KEY')
         
         if missing_keys:
             print(f"Warning: Missing API keys: {', '.join(missing_keys)}")
@@ -72,6 +73,7 @@ class Config:
         return {
             'openai_configured': bool(cls.OPENAI_API_KEY),
             'tavily_configured': bool(cls.TAVILY_API_KEY),
+            'exa_configured': bool(cls.EXA_API_KEY),
             'newsapi_configured': bool(cls.NEWSAPI_KEY),
             'pubmed_configured': bool(cls.PUBMED_EMAIL)
         }

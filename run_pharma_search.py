@@ -13,23 +13,23 @@ def check_dependencies():
     try:
         import flask
         import requests
-        print("✅ All dependencies are available")
+        print("All dependencies are available")
         return True
     except ImportError as e:
-        print(f"❌ Missing dependency: {e}")
+        print(f"Missing dependency: {e}")
         print("Installing missing dependencies...")
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "requests"])
-            print("✅ Dependencies installed successfully")
+            print("Dependencies installed successfully")
             return True
         except subprocess.CalledProcessError:
-            print("❌ Failed to install dependencies")
+            print("Failed to install dependencies")
             return False
 
 def main():
     """Main function to run the pharma search application"""
     print("=" * 60)
-    print("🔬 Pharma News Research Agent")
+    print("Pharma News Research Agent")
     print("=" * 60)
     print("Starting application...")
     
@@ -42,10 +42,11 @@ def main():
     # Import and run the application
     try:
         from medical_search_simple import app
-        print("✅ Application loaded successfully")
-        print("🌐 Opening browser to: http://127.0.0.1:5000")
-        print("📅 Default search range: Last 7 days")
-        print("🔬 Focus: Pharmaceutical news and clinical research")
+        print("Application loaded successfully")
+        print("Opening browser to: http://127.0.0.1:5000")
+        print("Default search range: Last 7 days")
+        print("Focus: Prostate Cancer, Urology, and Oncology Research")
+        print("Pre-filled keywords: prostate cancer, orgovyx, myfembree, OAB, etc.")
         print("=" * 60)
         print("Press Ctrl+C to stop the server")
         print("=" * 60)
@@ -53,7 +54,7 @@ def main():
         app.run(host='127.0.0.1', port=5000, debug=False)
         
     except Exception as e:
-        print(f"❌ Error starting application: {str(e)}")
+        print(f"Error starting application: {str(e)}")
         print("Please check your Python installation and try again")
 
 if __name__ == "__main__":

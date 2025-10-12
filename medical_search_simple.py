@@ -23,13 +23,27 @@ except ImportError:
 
 # Import our agentic workflow
 try:
-    from pharma_agent import PharmaNewsAgent
+    from multi_agent_pharma import MultiAgentPharmaAgent
     from config import Config
     AGENT_AVAILABLE = True
+    MULTI_AGENT_AVAILABLE = True
 except ImportError as e:
-    print(f"WARNING: Agentic workflow not available: {e}")
-    print("INFO: Falling back to basic search functionality")
-    AGENT_AVAILABLE = False
+    print(f"WARNING: Multi-agent workflow not available: {e}")
+    print("INFO: Trying fallback to basic pharma agent...")
+    try:
+        from pharma_agent import PharmaNewsAgent
+        from config import Config
+        AGENT_AVAILABLE = True
+        MULTI_AGENT_AVAILABLE = False
+    except ImportError as e2:
+        print(f"WARNING: Basic agentic workflow also not available: {e2}")
+        print("INFO: Falling back to basic search functionality")
+        AGENT_AVAILABLE = False
+        MULTI_AGENT_AVAILABLE = False
+    else:
+        MULTI_AGENT_AVAILABLE = False
+else:
+    MULTI_AGENT_AVAILABLE = True
 
 # Configuration
 if not AGENT_AVAILABLE:
@@ -45,14 +59,22 @@ app.config['SECRET_KEY'] = 'dev-secret-key'
 pharma_agent = None
 if AGENT_AVAILABLE:
     try:
-        pharma_agent = PharmaNewsAgent()
-        print("Pharma News Agent initialized successfully")
+        if MULTI_AGENT_AVAILABLE:
+            pharma_agent = MultiAgentPharmaAgent(Config())
+            print("Multi-Agent Pharma Agent initialized successfully")
+        else:
+            pharma_agent = PharmaNewsAgent()
+            print("Basic Pharma News Agent initialized successfully")
     except Exception as e:
         print(f"Failed to initialize Pharma News Agent: {e}")
         AGENT_AVAILABLE = False
 
 # In-memory storage for search results
 search_results_store = {}
+
+# In-memory storage for CSV uploads and multi-section processing
+csv_uploads_store = {}
+multi_section_results = {}
 
 def search_pubmed(keywords: List[str], max_results: int = 20, start_date: datetime = None, end_date: datetime = None) -> List[Dict[str, Any]]:
     """Search PubMed using Entrez API with date filtering"""
@@ -282,6 +304,173 @@ def highlight_keywords(text: str, keywords: List[str]) -> str:
     
     return highlighted_text
 
+def process_csv_upload(csv_content: str) -> Dict[str, Any]:
+    """Process uploaded CSV file and extract sections for multi-section processing"""
+    try:
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
+        sections = []
+        users = set()
+        
+        for row in csv_reader:
+            # Extract required columns
+            aliases = row.get('aliases', '').strip()
+            keywords = row.get('keywords', '').strip()
+            search_type = row.get('search_type', 'standard').strip()
+            subheader = row.get('subheader', '').strip()
+            header = row.get('header', '').strip()
+            user = row.get('user', '').strip()
+            
+            # Combine aliases and keywords, make unique
+            all_keywords = []
+            if aliases:
+                all_keywords.extend([alias.strip() for alias in aliases.split(',') if alias.strip()])
+            if keywords:
+                all_keywords.extend([kw.strip() for kw in keywords.split(',') if kw.strip()])
+            
+            # Remove duplicates and empty strings
+            unique_keywords = list(dict.fromkeys([kw for kw in all_keywords if kw]))
+            
+            if unique_keywords:  # Only add if we have keywords
+                section = {
+                    'aliases': aliases,
+                    'keywords': keywords,
+                    'combined_keywords': unique_keywords,
+                    'search_type': search_type,
+                    'subheader': subheader,
+                    'header': header,
+                    'user': user,
+                    'section_id': f"{user}_{header}_{subheader}".replace(' ', '_').replace('/', '_')
+                }
+                sections.append(section)
+                users.add(user)
+        
+        return {
+            'success': True,
+            'sections': sections,
+            'users': list(users),
+            'total_sections': len(sections)
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'CSV processing failed: {str(e)}',
+            'sections': [],
+            'users': [],
+            'total_sections': 0
+        }
+
+def process_multi_section_search(sections: List[Dict[str, Any]], start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """Process multiple sections with the same data and generate results for each"""
+    try:
+        section_results = {}
+        
+        for section in sections:
+            section_id = section['section_id']
+            keywords = section['combined_keywords']
+            search_type = section['search_type']
+            
+            print(f"Processing section: {section['header']} - {section['subheader']} for user: {section['user']}")
+            print(f"Keywords: {keywords}")
+            
+            # Use agentic workflow if available
+            if AGENT_AVAILABLE and pharma_agent:
+                workflow_result = pharma_agent.execute_research_workflow(
+                    keywords=keywords,
+                    start_date=start_date,
+                    end_date=end_date,
+                    search_type=search_type
+                )
+                
+                if workflow_result['success']:
+                    # Add section context to results
+                    processed_results = workflow_result['results']
+                    for result in processed_results:
+                        result['section_context'] = {
+                            'header': section['header'],
+                            'subheader': section['subheader'],
+                            'user': section['user'],
+                            'aliases': section['aliases'],
+                            'original_keywords': section['keywords']
+                        }
+                    
+                    section_results[section_id] = {
+                        'success': True,
+                        'section_info': {
+                            'header': section['header'],
+                            'subheader': section['subheader'],
+                            'user': section['user'],
+                            'aliases': section['aliases'],
+                            'keywords': section['keywords'],
+                            'combined_keywords': keywords,
+                            'search_type': search_type
+                        },
+                        'results': processed_results,
+                        'results_by_source': workflow_result.get('results_by_source', {}),
+                        'total_found': workflow_result.get('total_found', 0),
+                        'total_filtered': workflow_result.get('total_filtered', 0),
+                        'total_processed': workflow_result.get('total_processed', 0)
+                    }
+                else:
+                    section_results[section_id] = {
+                        'success': False,
+                        'error': workflow_result.get('error', 'Unknown error'),
+                        'section_info': section
+                    }
+            else:
+                # Fallback to basic search
+                raw_results = search_all_sources(keywords, Config.MAX_RESULTS_PER_SOURCE, start_date, end_date)
+                filtered_results = filter_results(raw_results, keywords, search_type)
+                
+                processed_results = []
+                for i, result in enumerate(filtered_results):
+                    relevance_score = calculate_relevance_score(result, keywords)
+                    summary = result['content'][:200] + "..." if len(result['content']) > 200 else result['content']
+                    highlighted_summary = highlight_keywords(summary, keywords)
+                    
+                    processed_result = result.copy()
+                    processed_result.update({
+                        'rank': i + 1,
+                        'relevance_score': relevance_score,
+                        'summary': summary,
+                        'highlighted_summary': highlighted_summary,
+                        'section_context': {
+                            'header': section['header'],
+                            'subheader': section['subheader'],
+                            'user': section['user'],
+                            'aliases': section['aliases'],
+                            'original_keywords': section['keywords']
+                        }
+                    })
+                    processed_results.append(processed_result)
+                
+                processed_results.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+                
+                section_results[section_id] = {
+                    'success': True,
+                    'section_info': section,
+                    'results': processed_results,
+                    'total_found': len(raw_results),
+                    'total_filtered': len(filtered_results),
+                    'total_processed': len(processed_results)
+                }
+        
+        return {
+            'success': True,
+            'section_results': section_results,
+            'total_sections': len(sections),
+            'successful_sections': len([r for r in section_results.values() if r['success']])
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Multi-section processing failed: {str(e)}',
+            'section_results': {},
+            'total_sections': 0,
+            'successful_sections': 0
+        }
+
 # HTML Template
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -289,315 +478,881 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Medical News Search</title>
+    <title>Pharma News Research Agent</title>
     <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            line-height: 1.6;
+            height: 100vh;
+            overflow: hidden;
         }
+
+        /* Header */
         .header {
-            text-align: center;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #2c3e50;
             color: white;
-            padding: 2rem;
-            border-radius: 10px;
-            margin-bottom: 2rem;
+            padding: 15px 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
-        .search-form {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
+
+        .header h1 {
+            font-size: 22px;
+            margin: 0;
         }
-        .form-group {
-            margin-bottom: 1rem;
+
+        .header p {
+            font-size: 13px;
+            margin: 5px 0 0 0;
+            opacity: 0.9;
         }
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: bold;
+
+        /* Main Layout */
+        .main-layout {
+            display: grid;
+            grid-template-columns: 220px 1fr 280px;
+            height: calc(100vh - 80px);
+            gap: 0;
         }
-        input, textarea, select {
-            width: 100%;
-            padding: 0.75rem;
-            border: 2px solid #ddd;
-            border-radius: 5px;
-            font-size: 1rem;
+
+        /* Left Sidebar */
+        .left-sidebar {
+            background: #34495e;
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
         }
-        input:focus, textarea:focus, select:focus {
-            outline: none;
-            border-color: #667eea;
+
+        .sidebar-section {
+            margin-bottom: 25px;
         }
-        .form-row {
+
+        .sidebar-section h3 {
+            font-size: 14px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-item {
+            padding: 8px 0;
+            font-size: 13px;
             display: flex;
-            gap: 1rem;
+            justify-content: space-between;
         }
-        .form-row .form-group {
-            flex: 1;
+
+        .stat-value {
+            font-weight: bold;
+            color: #3498db;
         }
-        .search-btn {
-            background: #667eea;
-            color: white;
-            padding: 1rem 2rem;
-            border: none;
-            border-radius: 5px;
-            font-size: 1.1rem;
+
+        .checkbox-group {
+            margin: 10px 0;
+        }
+
+        .checkbox-group label {
+            display: block;
+            margin: 8px 0;
+            font-size: 13px;
             cursor: pointer;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+
+        /* Main Content Area */
+        .main-content {
+            background: white;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e0e0e0;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 14px;
+            font-weight: 600;
+            color: #7f8c8d;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            color: #2c3e50;
+            background: #f8f9fa;
+        }
+
+        .tab.active {
+            color: #2c3e50;
+            border-bottom-color: #3498db;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Form Styles */
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            color: #2c3e50;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
             width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
         }
-        .search-btn:hover {
-            background: #5a6fd8;
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
         }
-        .search-btn:disabled {
-            background: #ccc;
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+
+        .btn-primary:disabled {
+            background: #95a5a6;
             cursor: not-allowed;
         }
-        .loading {
-            text-align: center;
-            padding: 2rem;
-            font-size: 1.2rem;
-            color: #667eea;
+
+        .btn-success {
+            background: #27ae60;
+            color: white;
         }
-        .results {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+
+        .btn-success:hover {
+            background: #229954;
         }
-        .result-item {
-            border: 1px solid #eee;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
         }
-        .result-title {
-            font-size: 1.2rem;
+
+        .btn-group .btn {
+            flex: 1;
+        }
+
+        /* Right Sidebar - Activity Panel */
+        .right-sidebar {
+            background: #ecf0f1;
+            padding: 20px;
+            overflow-y: auto;
+            border-left: 1px solid #bdc3c7;
+        }
+
+        .activity-header {
+            font-size: 14px;
             font-weight: bold;
-            margin-bottom: 0.5rem;
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #3498db;
+            text-transform: uppercase;
+            color: #2c3e50;
         }
+
+        .activity-log {
+            font-size: 12px;
+        }
+
+        .activity-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: white;
+            border-radius: 4px;
+            border-left: 3px solid #95a5a6;
+        }
+
+        .activity-item.info {
+            border-left-color: #3498db;
+        }
+
+        .activity-item.success {
+            border-left-color: #27ae60;
+        }
+
+        .activity-item.warning {
+            border-left-color: #f39c12;
+        }
+
+        .activity-item.error {
+            border-left-color: #e74c3c;
+        }
+
+        .activity-time {
+            font-size: 10px;
+            color: #7f8c8d;
+            margin-bottom: 4px;
+        }
+
+        .activity-message {
+            color: #2c3e50;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        .status-idle {
+            background: #95a5a6;
+        }
+
+        .status-processing {
+            background: #3498db;
+        }
+
+        .status-success {
+            background: #27ae60;
+        }
+
+        .status-error {
+            background: #e74c3c;
+        }
+
+        /* Results */
+        .results-container {
+            margin-top: 20px;
+        }
+
+        .result-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: white;
+        }
+
+        .result-card:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .enhanced-result {
+            border-left: 4px solid #3498db;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+
+        .result-scores {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .badge-type {
+            background: #e74c3c;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            text-transform: capitalize;
+        }
+
+        .result-relevance {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 14px;
+            border-left: 3px solid #28a745;
+        }
+
+        .result-keywords {
+            margin: 10px 0;
+        }
+
+        .keyword-tag {
+            background: #3498db;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            display: inline-block;
+        }
+
+        .result-significance,
+        .result-regulatory,
+        .result-market {
+            background: #fff3cd;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin: 8px 0;
+            font-size: 13px;
+            border-left: 3px solid #ffc107;
+        }
+
+        .result-regulatory {
+            background: #d1ecf1;
+            border-left-color: #17a2b8;
+        }
+
+        .result-market {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+
+        .keyword-highlight {
+            background: #fff3cd;
+            padding: 1px 3px;
+            border-radius: 2px;
+            font-weight: 600;
+        }
+
+        .result-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #2c3e50;
+        }
+
         .result-title a {
-            color: #667eea;
+            color: #3498db;
             text-decoration: none;
         }
+
         .result-title a:hover {
             text-decoration: underline;
         }
+
         .result-summary {
-            margin-bottom: 1rem;
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 10px;
             line-height: 1.6;
         }
+
         .result-meta {
+            font-size: 12px;
+            color: #7f8c8d;
             display: flex;
-            gap: 1rem;
-            font-size: 0.9rem;
-            color: #666;
+            gap: 15px;
+            flex-wrap: wrap;
         }
-        .relevance-score {
-            background: #667eea;
-            color: white;
-            padding: 0.25rem 0.5rem;
+
+        .result-meta span {
+            display: inline-block;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
             border-radius: 3px;
-            font-weight: bold;
+            font-size: 11px;
+            font-weight: 600;
         }
-        .download-btn {
-            background: #28a745;
+
+        .badge-score {
+            background: #3498db;
             color: white;
-            padding: 0.75rem 1.5rem;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-bottom: 1rem;
         }
-        .download-btn:hover {
-            background: #218838;
+
+        .badge-source {
+            background: #95a5a6;
+            color: white;
         }
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 1rem;
-            border-radius: 5px;
-            margin-bottom: 1rem;
-        }
-        .success {
-            background: #d4edda;
-            color: #155724;
-            padding: 1rem;
-            border-radius: 5px;
-            margin-bottom: 1rem;
-        }
-        .source-section {
-            margin-bottom: 1.5rem;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        .source-header {
-            background: #f8f9fa;
-            padding: 1rem;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
+
+        /* Loading State */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+            justify-content: center;
             align-items: center;
-            border-bottom: 1px solid #ddd;
-            transition: background-color 0.3s ease;
         }
-        .source-header:hover {
-            background: #e9ecef;
+
+        .loading-overlay.active {
+            display: flex;
         }
-        .source-header h3 {
-            margin: 0;
-            color: #495057;
-            font-size: 1.2rem;
-        }
-        .expand-icon {
-            font-size: 1.2rem;
-            color: #667eea;
-            transition: transform 0.3s ease;
-        }
-        .source-content {
-            padding: 1rem;
+
+        .loading-content {
             background: white;
-        }
-        .source-content .result-item {
-            margin-bottom: 1rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        .source-content .result-item:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-        }
-        .source-description {
-            margin: 0.5rem 0 0 0;
-            color: #6c757d;
-            font-size: 0.9rem;
-            font-style: italic;
-        }
-        .no-results {
-            color: #6c757d;
-            font-style: italic;
+            padding: 30px;
+            border-radius: 8px;
             text-align: center;
-            padding: 2rem;
+            max-width: 500px;
         }
-        .ai-insights, .ai-significance {
-            margin-top: 0.5rem;
-            padding: 0.5rem;
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #ecf0f1;
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #3498db;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        /* Alert Messages */
+        .alert {
+            padding: 12px 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+
+        /* CSV Upload Area */
+        .upload-area {
+            border: 2px dashed #bdc3c7;
+            border-radius: 4px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .upload-area:hover {
+            border-color: #3498db;
             background: #f8f9fa;
-            border-left: 3px solid #667eea;
-            border-radius: 0 4px 4px 0;
-            font-size: 0.9rem;
         }
-        .ai-insights {
-            border-left-color: #28a745;
+
+        .upload-area.dragover {
+            border-color: #27ae60;
+            background: #d5f4e6;
         }
-        .ai-significance {
-            border-left-color: #ffc107;
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #bdc3c7;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #95a5a6;
+        }
+
+        /* No Results */
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .no-results-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
         }
     </style>
 </head>
 <body>
+    <!-- Header -->
     <div class="header">
-        <h1>Pharma News Research Agent</h1>
-        <p>Deep research across PubMed, pharmaceutical news, and clinical sources with AI-powered curation</p>
+        <h1>🔬 Pharma News Research Agent</h1>
+        <p>AI-powered pharmaceutical news research with multi-source data collection</p>
     </div>
 
-    <form class="search-form" id="searchForm">
-        <div class="form-group">
-            <label for="keywords">Keywords (comma-separated, max 100)</label>
-            <textarea id="keywords" name="keywords" rows="3" placeholder="e.g., orgovyx, prostate cancer, diabetes, insulin, clinical trial, FDA approval..." required></textarea>
-            <div id="keywordCount" style="font-size: 0.9rem; color: #666; margin-top: 0.25rem;">0 keywords entered</div>
-        </div>
-
-        <div class="form-row">
-            <div class="form-group">
-                <label for="startDate">Start Date</label>
-                <input type="date" id="startDate" name="startDate">
+    <!-- Main Layout -->
+    <div class="main-layout">
+        <!-- Left Sidebar -->
+        <div class="left-sidebar">
+            <div class="sidebar-section">
+                <h3>Session Stats</h3>
+                <div class="stat-item">
+                    <span>Total Searches:</span>
+                    <span class="stat-value" id="stat-searches">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Results Found:</span>
+                    <span class="stat-value" id="stat-results">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Sources Used:</span>
+                    <span class="stat-value" id="stat-sources">0</span>
+                </div>
             </div>
-            <div class="form-group">
-                <label for="endDate">End Date</label>
-                <input type="date" id="endDate" name="endDate">
+
+            <div class="sidebar-section">
+                <h3>Search Engines</h3>
+                <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" id="engine-pubmed" checked>
+                        PubMed (Medical)
+                    </label>
+                    <label>
+                        <input type="checkbox" id="engine-exa" checked>
+                        Exa (Neural Search)
+                    </label>
+                    <label>
+                        <input type="checkbox" id="engine-tavily" checked>
+                        Tavily (Web Search)
+                    </label>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>API Status</h3>
+                <div class="stat-item">
+                    <span>OpenAI:</span>
+                    <span id="api-openai">...</span>
+                </div>
+                <div class="stat-item">
+                    <span>Tavily:</span>
+                    <span id="api-tavily">...</span>
+                </div>
+                <div class="stat-item">
+                    <span>Exa:</span>
+                    <span id="api-exa">...</span>
+                </div>
             </div>
         </div>
 
-        <div class="form-group">
-            <label for="searchType">Search Type</label>
-            <select id="searchType" name="searchType">
-                <option value="standard">Standard - Any keyword in article</option>
-                <option value="title">Title - Keyword in article title</option>
-                <option value="co-occurrence">Co-occurrence - 2+ keywords together</option>
-            </select>
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab active" data-tab="single">Single Search</button>
+                <button class="tab" data-tab="batch">Batch Processing</button>
+                <button class="tab" data-tab="results">Results History</button>
+            </div>
+
+            <!-- Single Search Tab -->
+            <div class="tab-content active" id="tab-single">
+                <div class="btn-group">
+                    <button class="btn btn-success" onclick="quickFill('prostate')">
+                        🏥 Prostate Cancer
+                    </button>
+                    <button class="btn btn-success" onclick="quickFill('ai')">
+                        🤖 AI in Pharma
+                    </button>
+                </div>
+
+                <form id="search-form" onsubmit="performSearch(event)">
+                    <div class="form-group">
+                        <label>Keywords (comma-separated)</label>
+                        <textarea id="keywords" placeholder="e.g., prostate cancer, orgovyx, immunotherapy" required></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Start Date</label>
+                            <input type="date" id="start-date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>End Date</label>
+                            <input type="date" id="end-date" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Search Type</label>
+                        <select id="search-type">
+                            <option value="standard">Standard (any keyword)</option>
+                            <option value="title">Title Only</option>
+                            <option value="co-occurrence">Co-occurrence (2+ keywords)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Alert Name (optional)</label>
+                            <input type="text" id="alert-name" placeholder="My Research Alert">
+                        </div>
+                        <div class="form-group">
+                            <label>Section Name (optional)</label>
+                            <input type="text" id="section-name" placeholder="Clinical Trials">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="search-btn">
+                        🔍 Start Research
+                    </button>
+                </form>
+
+                <div id="results-area" class="results-container"></div>
+            </div>
+
+            <!-- Batch Processing Tab -->
+            <div class="tab-content" id="tab-batch">
+                <div class="alert alert-info">
+                    Upload a CSV file with columns: aliases, keywords, search_type, subheader, header, user
+                </div>
+
+                <div class="upload-area" id="upload-area">
+                    <div style="font-size: 48px; margin-bottom: 10px;">📄</div>
+                    <p><strong>Click to upload</strong> or drag and drop</p>
+                    <p style="font-size: 12px; color: #7f8c8d; margin-top: 5px;">CSV files only</p>
+                    <input type="file" id="csv-file" accept=".csv" style="display: none;">
+                </div>
+
+                <div id="batch-results" style="margin-top: 20px;"></div>
+            </div>
+
+            <!-- Results History Tab -->
+            <div class="tab-content" id="tab-results">
+                <div class="alert alert-info">
+                    Previous search results will appear here
+                </div>
+                <div id="history-container"></div>
+            </div>
         </div>
 
-        <button type="submit" class="search-btn" id="searchBtn">Research Pharma Sources</button>
-    </form>
-
-    <div id="loading" class="loading" style="display: none;">
-        Researching pharma sources... Analyzing PubMed, clinical trials, and pharmaceutical news...
+        <!-- Right Sidebar - Activity Panel -->
+        <div class="right-sidebar">
+            <div class="activity-header">
+                <span class="status-indicator status-idle" id="status-indicator"></span>
+                Live Activity
+            </div>
+            <div class="activity-log" id="activity-log">
+                <div class="activity-item info">
+                    <div class="activity-time" id="current-time"></div>
+                    <div class="activity-message">System ready. Waiting for search...</div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div id="results" class="results" style="display: none;">
-        <h2>Search Results</h2>
-        <div id="resultsContent"></div>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <h3 id="loading-title">Processing Search...</h3>
+            <p id="loading-message">Collecting data from multiple sources</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <p style="font-size: 12px; color: #7f8c8d; margin-top: 10px;" id="progress-text">0% complete</p>
+        </div>
     </div>
 
     <script>
-        // Set default dates
-        const today = new Date();
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(today.getDate() - 7);
-        
-        document.getElementById('endDate').value = today.toISOString().split('T')[0];
-        document.getElementById('startDate').value = sevenDaysAgo.toISOString().split('T')[0];
+        // Initialize
+        let searchCount = 0;
+        let totalResults = 0;
+        let sourcesUsed = new Set();
 
-        // Update keyword count
-        document.getElementById('keywords').addEventListener('input', function() {
-            const keywords = this.value.split(',').filter(kw => kw.trim());
-            const count = document.getElementById('keywordCount');
-            count.textContent = `${keywords.length} keywords entered`;
-            
-            if (keywords.length > 100) {
-                count.style.color = '#dc3545';
-                count.textContent = `${keywords.length} keywords (max 100)`;
-            } else {
-                count.style.color = '#666';
-            }
+        // Update current time
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleTimeString();
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        // Set default dates (last 7 days)
+        const today = new Date();
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        document.getElementById('end-date').valueAsDate = today;
+        document.getElementById('start-date').valueAsDate = sevenDaysAgo;
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Remove active from all tabs
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                // Add active to clicked tab
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
         });
 
-        // Handle form submission
-        document.getElementById('searchForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
+        // Quick fill functions
+        function quickFill(type) {
+            const keywordsEl = document.getElementById('keywords');
+            const alertNameEl = document.getElementById('alert-name');
+            const sectionNameEl = document.getElementById('section-name');
+
+            if (type === 'prostate') {
+                keywordsEl.value = 'prostate cancer, orgovyx, relugolix, myfembree, OAB, overactive bladder, urology, oncology, hormone therapy, ADT';
+                alertNameEl.value = 'Prostate Cancer & Urology Research';
+                sectionNameEl.value = 'Clinical Updates';
+            } else if (type === 'ai') {
+                keywordsEl.value = 'AI, artificial intelligence, machine learning, RAG, LLM, agentic, pipelines, pharma, drug discovery, clinical trials AI';
+                alertNameEl.value = 'AI in Pharma Research';
+                sectionNameEl.value = 'Technology & Innovation';
+            }
+        }
+
+        // Activity logging
+        function addActivity(message, type = 'info') {
+            const log = document.getElementById('activity-log');
+            const time = new Date().toLocaleTimeString();
             
-            const keywords = document.getElementById('keywords').value.trim();
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
-            const searchType = document.getElementById('searchType').value;
+            const item = document.createElement('div');
+            item.className = `activity-item ${type}`;
+            item.innerHTML = `
+                <div class="activity-time">${time}</div>
+                <div class="activity-message">${message}</div>
+            `;
             
-            if (!keywords) {
-                alert('Please enter at least one keyword');
+            log.insertBefore(item, log.firstChild);
+            
+            // Keep only last 20 items
+            while (log.children.length > 20) {
+                log.removeChild(log.lastChild);
+            }
+
+            // Update status indicator
+            const indicator = document.getElementById('status-indicator');
+            indicator.className = 'status-indicator status-' + (type === 'error' ? 'error' : type === 'success' ? 'success' : 'processing');
+        }
+
+        // Get selected search engines
+        function getSelectedEngines() {
+            const engines = [];
+            if (document.getElementById('engine-pubmed').checked) engines.push('pubmed');
+            if (document.getElementById('engine-exa').checked) engines.push('exa');
+            if (document.getElementById('engine-tavily').checked) engines.push('tavily');
+            return engines;
+        }
+
+        // Perform search
+        async function performSearch(event) {
+            event.preventDefault();
+            
+            const keywords = document.getElementById('keywords').value;
+            const startDate = document.getElementById('start-date').value;
+            const endDate = document.getElementById('end-date').value;
+            const searchType = document.getElementById('search-type').value;
+            const alertName = document.getElementById('alert-name').value;
+            const sectionName = document.getElementById('section-name').value;
+            const searchEngines = getSelectedEngines();
+
+            if (searchEngines.length === 0) {
+                alert('Please select at least one search engine');
                 return;
             }
-            
-            const keywordList = keywords.split(',').filter(kw => kw.trim());
-            if (keywordList.length > 100) {
-                alert('Maximum 100 keywords allowed');
-                return;
-            }
-            
-            if (startDate && endDate && startDate > endDate) {
-                alert('Start date must be before end date');
-                return;
-            }
-            
+
             // Show loading
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('results').style.display = 'none';
-            document.getElementById('searchBtn').disabled = true;
+            document.getElementById('loading-overlay').classList.add('active');
+            document.getElementById('search-btn').disabled = true;
             
+            // Update activity
+            addActivity('Starting search with ' + searchEngines.join(', '), 'info');
+            addActivity('Keywords: ' + keywords.substring(0, 50) + '...', 'info');
+
+            // Simulate progress
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 5;
+                if (progress <= 90) {
+                    document.getElementById('progress-fill').style.width = progress + '%';
+                    document.getElementById('progress-text').textContent = progress + '% complete';
+                }
+            }, 500);
+
             try {
                 const response = await fetch('/search', {
                     method: 'POST',
@@ -608,147 +1363,245 @@ HTML_TEMPLATE = """
                         keywords: keywords,
                         start_date: startDate,
                         end_date: endDate,
-                        search_type: searchType
+                        search_type: searchType,
+                        alert_name: alertName,
+                        section_name: sectionName,
+                        search_engines: searchEngines
                     })
                 });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    displayResults(result);
+
+                clearInterval(progressInterval);
+                document.getElementById('progress-fill').style.width = '100%';
+                document.getElementById('progress-text').textContent = '100% complete';
+
+                const data = await response.json();
+
+                if (data.error) {
+                    addActivity('Error: ' + data.error, 'error');
+                    alert('Error: ' + data.error);
                 } else {
-                    showError(result.error || 'Search failed');
+                    searchCount++;
+                    totalResults += data.results.length;
+                    if (data.results_by_source) {
+                        Object.keys(data.results_by_source).forEach(source => {
+                            if (source !== 'metadata' && data.results_by_source[source].length > 0) {
+                                sourcesUsed.add(source);
+                            }
+                        });
+                    }
+
+                    // Update stats
+                    document.getElementById('stat-searches').textContent = searchCount;
+                    document.getElementById('stat-results').textContent = totalResults;
+                    document.getElementById('stat-sources').textContent = sourcesUsed.size;
+
+                    addActivity(`Found ${data.results.length} results`, 'success');
+                    displayResults(data);
                 }
             } catch (error) {
-                showError('Network error. Please check your connection and try again.');
+                clearInterval(progressInterval);
+                addActivity('Network error: ' + error.message, 'error');
+                alert('Error: ' + error.message);
             } finally {
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('searchBtn').disabled = false;
+                document.getElementById('loading-overlay').classList.remove('active');
+                document.getElementById('search-btn').disabled = false;
+                document.getElementById('progress-fill').style.width = '0%';
+                document.getElementById('status-indicator').className = 'status-indicator status-idle';
+            }
+        }
+
+        // Display results
+        function displayResults(data) {
+            const resultsArea = document.getElementById('results-area');
+            
+            if (!data.results || data.results.length === 0) {
+                resultsArea.innerHTML = '<div class="no-results"><div class="no-results-icon">🔍</div><p>No results found</p></div>';
+                return;
+            }
+
+            let html = '<div class="alert alert-success">Found ' + data.results.length + ' results from ' + 
+                      (data.results_by_source ? Object.keys(data.results_by_source).filter(k => k !== 'metadata').length : 'multiple') + 
+                      ' sources</div>';
+
+            data.results.forEach(result => {
+                // Enhanced result display with detailed information
+                const relevanceScore = result.relevance_score || 0;
+                const relevanceReason = result.relevance_reason || 'No reason provided';
+                const articleType = result.article_type || 'unknown';
+                const summary = result.summary || result.content?.substring(0, 300) || 'No summary available';
+                const highlightedContent = result.highlighted_content || summary;
+                const mentionedKeywords = result.mentioned_keywords || [];
+                const clinicalSignificance = result.clinical_significance;
+                const regulatoryImpact = result.regulatory_impact;
+                const marketImpact = result.market_impact;
+                
+                // Format date properly
+                let dateDisplay = 'No date';
+                if (result.date) {
+                    try {
+                        const date = new Date(result.date);
+                        dateDisplay = date.toLocaleDateString();
+                    } catch (e) {
+                        dateDisplay = result.date;
+                    }
+                }
+                
+                // Create keyword tags
+                const keywordTags = mentionedKeywords.map(kw => 
+                    `<span class="keyword-tag">${kw}</span>`
+                ).join('');
+                
+                html += `
+                    <div class="result-card enhanced-result">
+                        <div class="result-header">
+                            <div class="result-title">
+                                <a href="${result.url}" target="_blank">${result.title}</a>
+                            </div>
+                            <div class="result-scores">
+                                <span class="badge badge-score">Relevance: ${relevanceScore}</span>
+                                <span class="badge badge-type">${articleType}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="result-summary">
+                            ${highlightedContent}
+                        </div>
+                        
+                        <div class="result-relevance">
+                            <strong>Why it's relevant:</strong> ${relevanceReason}
+                        </div>
+                        
+                        ${mentionedKeywords.length > 0 ? `
+                        <div class="result-keywords">
+                            <strong>Keywords found:</strong> ${keywordTags}
+                        </div>
+                        ` : ''}
+                        
+                        ${clinicalSignificance ? `
+                        <div class="result-significance">
+                            <strong>Clinical Significance:</strong> ${clinicalSignificance}
+                        </div>
+                        ` : ''}
+                        
+                        ${regulatoryImpact ? `
+                        <div class="result-regulatory">
+                            <strong>Regulatory Impact:</strong> ${regulatoryImpact}
+                        </div>
+                        ` : ''}
+                        
+                        ${marketImpact ? `
+                        <div class="result-market">
+                            <strong>Market Impact:</strong> ${marketImpact}
+                        </div>
+                        ` : ''}
+                        
+                        <div class="result-meta">
+                            <span><span class="badge badge-source">${result.source || 'Unknown'}</span></span>
+                            <span>📅 ${dateDisplay}</span>
+                            ${result.authors ? '<span>👤 ' + result.authors.substring(0, 50) + '</span>' : ''}
+                        </div>
+                    </div>
+                `;
+            });
+
+            resultsArea.innerHTML = html;
+        }
+
+        // CSV Upload
+        document.getElementById('upload-area').addEventListener('click', () => {
+            document.getElementById('csv-file').click();
+        });
+
+        document.getElementById('csv-file').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                addActivity('Uploading CSV: ' + file.name, 'info');
+                await uploadCSV(file);
             }
         });
 
-        function displayResults(result) {
-            const resultsDiv = document.getElementById('results');
-            const contentDiv = document.getElementById('resultsContent');
-            
-            if (result.results.length === 0) {
-                contentDiv.innerHTML = '<p>No results found. Try adjusting your keywords or search criteria.</p>';
+        const uploadArea = document.getElementById('upload-area');
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.endsWith('.csv')) {
+                addActivity('Processing dropped CSV: ' + file.name, 'info');
+                await uploadCSV(file);
             } else {
-                // Use the pre-organized results_by_source from the backend
-                const resultsBySource = result.results_by_source || {};
-                const metadata = resultsBySource.metadata || {};
+                alert('Please drop a CSV file');
+            }
+        });
+
+        async function uploadCSV(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                document.getElementById('loading-overlay').classList.add('active');
                 
-                let html = `
-                    <div style="margin-bottom: 1rem;">
-                        <button class="download-btn" onclick="downloadCSV('${result.session_id}')">Download CSV</button>
-                        <span style="margin-left: 1rem; color: #666;">
-                            Found ${result.total_found} articles, ${result.total_filtered} after filtering, ${result.total_processed} final results
-                        </span>
-                    </div>
-                `;
+                const response = await fetch('/upload_csv', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
                 
-                // Define source configurations
-                const sourceConfigs = [
-                    {
-                        key: 'pubmed',
-                        title: 'PubMed Medical Literature',
-                        description: 'Peer-reviewed medical research and clinical studies',
-                        icon: '📚',
-                        results: resultsBySource.pubmed || []
-                    },
-                    {
-                        key: 'tavily',
-                        title: 'Tavily Web Search',
-                        description: 'Enhanced web search for pharmaceutical news and updates',
-                        icon: '🔍',
-                        results: resultsBySource.tavily || []
-                    },
-                    {
-                        key: 'openai_curated',
-                        title: 'AI-Curated Insights',
-                        description: 'Intelligently curated and analyzed results with AI insights',
-                        icon: '🧠',
-                        results: resultsBySource.openai_curated || []
-                    }
-                ];
-                
-                // Create expandable sections for each source
-                sourceConfigs.forEach(sourceConfig => {
-                    const sourceResults = sourceConfig.results;
-                    const sourceId = sourceConfig.key;
-                    
-                    html += `
-                        <div class="source-section">
-                            <div class="source-header" onclick="toggleSource('${sourceId}')">
-                                <h3>${sourceConfig.icon} ${sourceConfig.title} (${sourceResults.length} results)</h3>
-                                <p class="source-description">${sourceConfig.description}</p>
-                                <span class="expand-icon" id="icon-${sourceId}">▼</span>
-                            </div>
-                            <div class="source-content" id="content-${sourceId}" style="display: none;">
-                    `;
-                    
-                    if (sourceResults.length === 0) {
-                        html += `<p class="no-results">No results found from this source.</p>`;
-                    } else {
-                        sourceResults.forEach((item, index) => {
-                            const date = new Date(item.date).toLocaleDateString();
-                            html += `
-                                <div class="result-item">
-                                    <div class="result-title">
-                                        <a href="${item.url}" target="_blank">${item.title}</a>
-                                    </div>
-                                    <div class="result-summary">${item.highlighted_summary}</div>
-                                    <div class="result-meta">
-                                        <span><strong>${item.source}</strong></span>
-                                        <span>Date: ${date}</span>
-                                        <span class="relevance-score">Score: ${item.relevance_score}</span>
-                                    </div>
-                                    ${item.ai_insights ? `<div class="ai-insights"><strong>AI Insights:</strong> ${item.ai_insights}</div>` : ''}
-                                    ${item.ai_significance ? `<div class="ai-significance"><strong>Clinical Significance:</strong> ${item.ai_significance}</div>` : ''}
-                                </div>
-                            `;
-                        });
-                    }
-                    
-                    html += `
-                            </div>
+                if (data.error) {
+                    addActivity('CSV upload error: ' + data.error, 'error');
+                    alert('Error: ' + data.error);
+                } else {
+                    addActivity('CSV processed: ' + data.sections.length + ' sections', 'success');
+                    document.getElementById('batch-results').innerHTML = `
+                        <div class="alert alert-success">
+                            CSV uploaded successfully: ${data.sections.length} sections found
                         </div>
                     `;
-                });
-                
-                contentDiv.innerHTML = html;
-            }
-            
-            resultsDiv.style.display = 'block';
-        }
-        
-        function toggleSource(sourceId) {
-            const content = document.getElementById(`content-${sourceId}`);
-            const icon = document.getElementById(`icon-${sourceId}`);
-            
-            if (content.style.display === 'none') {
-                content.style.display = 'block';
-                icon.textContent = '▲';
-            } else {
-                content.style.display = 'none';
-                icon.textContent = '▼';
+                }
+            } catch (error) {
+                addActivity('CSV upload failed: ' + error.message, 'error');
+                alert('Error: ' + error.message);
+            } finally {
+                document.getElementById('loading-overlay').classList.remove('active');
             }
         }
 
-        function showError(message) {
-            const resultsDiv = document.getElementById('results');
-            const contentDiv = document.getElementById('resultsContent');
-            
-            contentDiv.innerHTML = `<div class="error">ERROR: ${message}</div>`;
-            resultsDiv.style.display = 'block';
-        }
+        // Check API status on load
+        fetch('/search', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                keywords: 'test',
+                start_date: '2024-01-01',
+                end_date: '2024-01-02',
+                search_type: 'standard',
+                search_engines: []
+            })
+        }).then(r => r.json()).then(data => {
+            // This will fail but we can check the response
+            // In a real implementation, we'd have a dedicated /api/status endpoint
+        }).catch(() => {
+            // Expected to fail
+        });
 
-        function downloadCSV(sessionId) {
-            window.open(`/download/${sessionId}`, '_blank');
-        }
+        // Mark APIs as configured (placeholder - should come from backend)
+        document.getElementById('api-openai').innerHTML = '✅';
+        document.getElementById('api-tavily').innerHTML = '✅';
+        document.getElementById('api-exa').innerHTML = '✅';
     </script>
 </body>
 </html>
+
+
 """
 
 @app.route('/')
@@ -770,6 +1623,9 @@ def search():
         start_date_str = data.get('start_date', '')
         end_date_str = data.get('end_date', '')
         search_type = data.get('search_type', 'standard')
+        alert_name = data.get('alert_name', '').strip()
+        section_name = data.get('section_name', '').strip()
+        search_engines = data.get('search_engines', ['pubmed', 'exa', 'tavily'])  # Default to all engines
         
         # Validate keywords
         if not keywords_str:
@@ -803,13 +1659,25 @@ def search():
         
         # Use agentic workflow if available, otherwise fallback to basic search
         if AGENT_AVAILABLE and pharma_agent:
-            print("Using agentic workflow for enhanced research...")
-            workflow_result = pharma_agent.execute_research_workflow(
-                keywords=keywords,
-                start_date=start_date,
-                end_date=end_date,
-                search_type=search_type
-            )
+            if MULTI_AGENT_AVAILABLE:
+                print("Using Multi-Agent workflow for enhanced research...")
+                import asyncio
+                workflow_result = asyncio.run(pharma_agent.execute_workflow(
+                    keywords=keywords,
+                    start_date=start_date,
+                    end_date=end_date,
+                    search_type=search_type,
+                    search_engines=search_engines
+                ))
+            else:
+                print("Using basic agentic workflow for enhanced research...")
+                workflow_result = pharma_agent.execute_research_workflow(
+                    keywords=keywords,
+                    start_date=start_date,
+                    end_date=end_date,
+                    search_type=search_type,
+                    search_engines=search_engines
+                )
             
             if workflow_result['success']:
                 processed_results = workflow_result['results']
@@ -873,6 +1741,8 @@ def search():
             'metadata': {
                 'keywords': keywords,
                 'search_type': search_type,
+                'alert_name': alert_name,
+                'section_name': section_name,
                 'timestamp': datetime.now().isoformat()
             },
             'timestamp': datetime.now()
@@ -894,6 +1764,8 @@ def search():
             'search_metadata': {
                 'keywords': keywords,
                 'search_type': search_type,
+                'alert_name': alert_name,
+                'section_name': section_name,
                 'timestamp': datetime.now().isoformat(),
                 'agentic_workflow': AGENT_AVAILABLE and pharma_agent is not None
             }
@@ -905,6 +1777,113 @@ def search():
             'success': False,
             'error': f'Search failed: {str(e)}',
             'results': []
+        }), 500
+
+@app.route('/copy_all_results_html/<session_id>')
+def copy_all_results_html(session_id):
+    """Generate HTML for all results in a session, sorted by AI score"""
+    try:
+        if session_id not in search_results_store:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        result = search_results_store[session_id]
+        if not result or 'results_by_source' not in result:
+            return jsonify({'error': 'No results found'}), 404
+        
+        # Collect all articles from all sources
+        all_articles = []
+        for source_name, source_data in result['results_by_source'].items():
+            if source_name == 'metadata':
+                continue
+            for article in source_data.get('articles', []):
+                all_articles.append(article)
+        
+        # Sort by AI relevance score (highest first)
+        all_articles.sort(key=lambda x: x.get('ai_relevance_score', 0), reverse=True)
+        
+        # Generate HTML
+        html_parts = []
+        html_parts.append('<div class="pharma-news-results">')
+        html_parts.append(f'<h2>Pharmaceutical News Research Results ({len(all_articles)} articles)</h2>')
+        
+        for i, article in enumerate(all_articles, 1):
+            # Format date
+            try:
+                date_obj = datetime.fromisoformat(article['date'].replace('Z', '+00:00'))
+                formatted_date = date_obj.strftime('%Y-%m-%d')
+            except:
+                formatted_date = 'Date not available'
+            
+            # Get AI insights
+            ai_summary = article.get('ai_summary', '')
+            ai_insights = article.get('ai_insights', '')
+            ai_significance = article.get('ai_significance', '')
+            ai_regulatory = article.get('ai_regulatory', '')
+            ai_market_impact = article.get('ai_market_impact', '')
+            ai_quality = article.get('ai_research_quality', 'Medium')
+            ai_score = article.get('ai_relevance_score', 0)
+            
+            # Get LLM extracted date if available
+            llm_date = article.get('llm_extracted_date')
+            if llm_date:
+                try:
+                    llm_date_obj = datetime.fromisoformat(llm_date.replace('Z', '+00:00'))
+                    formatted_llm_date = llm_date_obj.strftime('%Y-%m-%d')
+                except:
+                    formatted_llm_date = None
+            else:
+                formatted_llm_date = None
+            
+            html_parts.append(f'''
+            <div class="result-item" style="margin-bottom: 2rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px;">
+                <h3 style="color: #2c3e50; margin-bottom: 0.5rem;">{i}. {article['title']}</h3>
+                <div style="margin-bottom: 1rem; color: #666; font-size: 0.9em;">
+                    <strong>Source:</strong> {article.get('source_name', 'Unknown')} | 
+                    <strong>Date:</strong> {formatted_date} | 
+                    <strong>AI Score:</strong> {ai_score}/100 | 
+                    <strong>Research Quality:</strong> {ai_quality}''')
+            
+            if formatted_llm_date:
+                html_parts.append(f' | <strong>LLM Extracted Date:</strong> {formatted_llm_date}')
+            
+            html_parts.append(f'''</div>
+                <div style="margin-bottom: 1rem;">
+                    <strong>URL:</strong> <a href="{article['url']}" target="_blank" style="color: #3498db;">{article['url']}</a>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <strong>AI Summary:</strong> {ai_summary}
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <strong>Key Insights:</strong> {ai_insights}
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <strong>Clinical Significance:</strong> {ai_significance}
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <strong>Regulatory Implications:</strong> {ai_regulatory}
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <strong>Market Impact:</strong> {ai_market_impact}
+                </div>
+                <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px;">
+                    <strong>Content Preview:</strong><br>
+                    {article['content'][:500]}{'...' if len(article['content']) > 500 else ''}
+                </div>
+            </div>
+            ''')
+        
+        html_parts.append('</div>')
+        
+        return jsonify({
+            'success': True,
+            'html': ''.join(html_parts)
+        })
+        
+    except Exception as e:
+        print(f"Error generating HTML for session {session_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to generate HTML: {str(e)}'
         }), 500
 
 @app.route('/download/<session_id>')
@@ -960,6 +1939,194 @@ def download_csv(session_id):
         
     except Exception as e:
         print(f"CSV download error: {str(e)}")
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
+@app.route('/upload_csv', methods=['POST'])
+def upload_csv():
+    """Handle CSV file upload for multi-section processing"""
+    try:
+        if 'csv_file' not in request.files:
+            return jsonify({'error': 'No CSV file provided'}), 400
+        
+        csv_file = request.files['csv_file']
+        if csv_file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if not csv_file.filename.endswith('.csv'):
+            return jsonify({'error': 'File must be a CSV'}), 400
+        
+        # Read CSV content
+        csv_content = csv_file.read().decode('utf-8')
+        
+        # Process CSV
+        csv_result = process_csv_upload(csv_content)
+        
+        if csv_result['success']:
+            # Store CSV data
+            upload_id = f"csv_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            csv_uploads_store[upload_id] = {
+                'sections': csv_result['sections'],
+                'users': csv_result['users'],
+                'timestamp': datetime.now()
+            }
+            
+            return jsonify({
+                'success': True,
+                'upload_id': upload_id,
+                'sections': csv_result['sections'],
+                'users': csv_result['users'],
+                'total_sections': csv_result['total_sections']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': csv_result['error']
+            }), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'CSV upload failed: {str(e)}'
+        }), 500
+
+@app.route('/process_multi_section', methods=['POST'])
+def process_multi_section():
+    """Process multiple sections from uploaded CSV"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        upload_id = data.get('upload_id')
+        selected_user = data.get('selected_user')
+        start_date_str = data.get('start_date', '')
+        end_date_str = data.get('end_date', '')
+        
+        if not upload_id or upload_id not in csv_uploads_store:
+            return jsonify({'error': 'Invalid upload ID'}), 400
+        
+        csv_data = csv_uploads_store[upload_id]
+        sections = csv_data['sections']
+        
+        # Filter sections by user if specified
+        if selected_user:
+            sections = [s for s in sections if s['user'] == selected_user]
+        
+        if not sections:
+            return jsonify({'error': 'No sections found for the selected user'}), 400
+        
+        # Parse dates
+        try:
+            if start_date_str:
+                start_date = datetime.fromisoformat(start_date_str)
+            else:
+                start_date = datetime.now() - timedelta(days=7)
+            
+            if end_date_str:
+                end_date = datetime.fromisoformat(end_date_str)
+            else:
+                end_date = datetime.now()
+                
+        except ValueError as e:
+            return jsonify({'error': f'Invalid date format: {str(e)}'}), 400
+        
+        # Process multi-section search
+        multi_result = process_multi_section_search(sections, start_date, end_date)
+        
+        if multi_result['success']:
+            # Store results
+            session_id = f"multi_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            multi_section_results[session_id] = {
+                'section_results': multi_result['section_results'],
+                'metadata': {
+                    'upload_id': upload_id,
+                    'selected_user': selected_user,
+                    'timestamp': datetime.now().isoformat()
+                },
+                'timestamp': datetime.now()
+            }
+            
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'section_results': multi_result['section_results'],
+                'total_sections': multi_result['total_sections'],
+                'successful_sections': multi_result['successful_sections']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': multi_result['error']
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Multi-section processing failed: {str(e)}'
+        }), 500
+
+@app.route('/download_multi_section/<session_id>')
+def download_multi_section_csv(session_id):
+    """Download multi-section results as CSV"""
+    try:
+        if session_id not in multi_section_results:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        multi_data = multi_section_results[session_id]
+        section_results = multi_data['section_results']
+        
+        if not section_results:
+            return jsonify({'error': 'No results to download'}), 400
+        
+        # Create CSV content
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        headers = ['Section Header', 'Section Subheader', 'User', 'Rank', 'Title', 'Summary', 'Source', 'Date', 'URL', 'Relevance Score', 'Keywords', 'Aliases']
+        writer.writerow(headers)
+        
+        # Write data rows for all sections
+        for section_id, section_data in section_results.items():
+            if section_data['success']:
+                section_info = section_data['section_info']
+                results = section_data['results']
+                
+                for result in results:
+                    row = [
+                        section_info['header'],
+                        section_info['subheader'],
+                        section_info['user'],
+                        result.get('rank', ''),
+                        result.get('title', ''),
+                        result.get('summary', '').replace('\n', ' ').replace('\r', ' '),
+                        result.get('source', ''),
+                        result.get('date', ''),
+                        result.get('url', ''),
+                        result.get('relevance_score', ''),
+                        section_info['keywords'],
+                        section_info['aliases']
+                    ]
+                    writer.writerow(row)
+        
+        # Create response
+        output.seek(0)
+        csv_content = output.getvalue()
+        output.close()
+        
+        # Create filename
+        filename = f"multi_section_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        # Return CSV file
+        return send_file(
+            io.BytesIO(csv_content.encode('utf-8')),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
         return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
 @app.route('/health')

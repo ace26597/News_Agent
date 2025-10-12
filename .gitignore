@@ -50,3 +50,5 @@ instance/
 # Temporary files
 *.tmp
 *.temp
+
+constants.py
