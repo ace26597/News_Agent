@@ -1,112 +1,152 @@
 # Pharma News Research Agent
 
-An AI-powered pharmaceutical news research application with intelligent curation and multi-source data collection.
+An AI-powered pharmaceutical news research application that aggregates and curates content from multiple sources including PubMed, Exa, and Tavily APIs.
 
-## Features
+## 🚀 Quick Start
 
-- 🔍 **Multi-Source Search**: Integrates PubMed, Exa, and Tavily APIs for comprehensive research
-- 🤖 **AI-Powered Curation**: Uses OpenAI GPT for intelligent content analysis and relevance scoring
-- 📊 **Multiple Search Strategies**: Standard, Title-based, and Co-occurrence search modes
-- 📅 **Date Filtering**: Default 7-day search range (configurable)
-- 🎯 **Pre-filled Keywords**: Quick-fill buttons for common research topics
-- 📁 **CSV Processing**: Batch processing support for multiple sections
-- 📥 **Export to CSV**: Download results for further analysis
+### 1. Install Dependencies
 
-## Quick Start
+```bash
+pip install -r requirements.txt
+```
 
-1. **Set up API keys** in `constants.py`:
-   - OpenAI API Key (for intelligent curation)
-   - Tavily API Key (for enhanced web search)
-   - Exa API Key (for neural search)
-   - NewsAPI Key (for pharmaceutical news)
-   - PubMed Email (for PubMed API access)
+### 2. Configure API Keys
 
-2. **Run the application**:
-   ```bash
-   python run_pharma_search.py
-   ```
+Copy the example constants file and add your API keys:
 
-3. **Access the web interface** at `http://127.0.0.1:5000`
+```bash
+cp constants.py.example constants.py
+```
 
-## Project Structure
+Edit `constants.py` and add your API keys:
+- **OpenAI API Key** (Required for AI-powered curation)
+- **Tavily API Key** (Optional for enhanced web search)
+- **Exa API Key** (Optional for neural search)
+- **NewsAPI Key** (Optional for pharmaceutical news)
+- **PubMed Email** (Required for PubMed API access)
+
+### 3. Run the Application
+
+```bash
+python run_pharma_search.py
+```
+
+The application will start on `http://127.0.0.1:5000`
+
+## 📁 Project Structure
 
 ```
 News-Agent/
-├── medical_search_simple.py  # Flask application & UI
-├── pharma_agent.py           # Agentic workflow orchestrator
-├── config.py                 # Configuration management
-├── constants.py              # API keys and settings
-├── run_pharma_search.py      # Application launcher
-└── README.md                 # This file
+├── medical_search_simple.py    # Main Flask web application
+├── pharma_agent.py              # Primary agent implementation
+├── multi_agent_pharma.py        # Multi-agent orchestrator
+├── config.py                    # Configuration management
+├── constants.py                 # API keys and settings (not in git)
+├── constants.py.example         # Example configuration template
+├── run_pharma_search.py         # Application launcher script
+├── requirements.txt             # Python dependencies
+└── README.md                    # This file
 ```
 
-## Usage
+## ✨ Features
+
+- 🔍 **Multi-Source Search**: Aggregates from PubMed, Exa, and Tavily APIs
+- 🤖 **AI-Powered Curation**: Uses OpenAI GPT for intelligent content analysis
+- 🧠 **Smart Date Extraction**: Fast LLM extracts dates from URLs, content, and metadata for articles without publication dates
+- 📊 **Multiple Search Strategies**: Standard, Title-based, and Co-occurrence modes
+- 📅 **Date Filtering**: Default 7-day search range (configurable)
+- 🎯 **Quick-fill Buttons**: Pre-populated keywords for common research topics
+- 📥 **CSV Export**: Download results for further analysis
+- 📁 **Batch Processing**: Upload CSV files for multi-section searches
+
+## 📖 Usage
 
 ### Single Search
-1. Use the quick-fill buttons to populate common keywords:
-   - 🏥 **Prostate Cancer & Urology**: Pre-fills keywords for prostate cancer, orgovyx, myfembree, OAB, etc.
-   - 🤖 **AI in Pharma**: Pre-fills keywords for AI, machine learning, RAG, LLM, etc.
 
-2. Or enter your own keywords (comma-separated)
+1. **Choose a quick-fill option** or enter custom keywords:
+   - 🏥 Prostate Cancer & Urology (orgovyx, myfembree, OAB, etc.)
+   - 🤖 AI in Pharma (AI, machine learning, RAG, LLM, etc.)
 
-3. Select date range (defaults to last 7 days)
+2. **Select date range** (default: last 7 days)
 
-4. Choose search type:
+3. **Choose search type**:
    - **Standard**: Any keyword in article
-   - **Title**: Keyword must be in article title
+   - **Title**: Keyword must be in title
    - **Co-occurrence**: 2+ keywords must appear together
 
-5. Click "Research Pharma Sources" to start the search
+4. **Click "Research Pharma Sources"** to start the search
 
 ### Multi-Section CSV Processing
-Upload a CSV file with columns: `aliases`, `keywords`, `search_type`, `subheader`, `header`, `user`
 
-## Default Settings
+Upload a CSV file with columns:
+- `aliases` - Alternative names/keywords
+- `keywords` - Main search terms
+- `search_type` - standard/title/co-occurrence
+- `subheader` - Section name
+- `header` - Main header
+- `user` - User identifier
 
-- **Date Range**: Last 7 days (today as end date, today-7 days as start date)
-- **Search Engines**: PubMed, Exa, and Tavily (all enabled by default)
-- **Max Keywords**: 100 per search
-- **Max Results**: 50 per source
+## ⚙️ Configuration
 
-## Features in Detail
+Default settings in `constants.py`:
 
-### Autofill Buttons
-The UI includes quick-fill buttons that automatically populate:
-- Keywords relevant to the research topic
-- Alert and section names
-- Date range (last 7 days)
+```python
+# Search Configuration
+DEFAULT_DATE_RANGE_DAYS = 7
+MAX_KEYWORDS = 100
+MAX_RESULTS_PER_SOURCE = 50
 
-### Agentic Workflow
-The application uses an intelligent multi-step workflow:
-1. Data Collection from multiple sources
-2. Data Validation & Filtering
-3. Intelligent Curation with LLM
-4. Relevance Scoring & Ranking
-5. Content Enhancement & Highlighting
-6. Result Aggregation & Formatting
+# LLM Configuration
+OPENAI_MODEL = "gpt-4o-mini"  # Main model for curation
+DATE_EXTRACTION_MODEL = "gpt-3.5-turbo"  # Fast model for date extraction
+MAX_TOKENS = 3000
+TEMPERATURE = 0.0
+```
 
-### API Integration
-- **PubMed**: Medical literature and clinical trials
-- **Exa**: Neural search for web content
-- **Tavily**: Enhanced web search
-- **OpenAI**: GPT-powered curation and summarization
+### Smart Date Extraction
 
-## Requirements
+Articles without publication dates are processed by a fast LLM (`gpt-3.5-turbo`) that:
+- Analyzes URLs for date patterns (e.g., `/2024/03/15/`)
+- Scans content for publication indicators
+- Checks metadata and article text (up to 3000 characters)
+- Extracts dates and validates them against your search range
 
-- Python 3.7+
-- Flask
-- Requests
-- OpenAI Python SDK
-- Tavily Python SDK (optional)
-- Exa Python SDK (optional)
+**Benefits:**
+- 📈 Captures more relevant articles (rescued by LLM)
+- 💰 Cost-efficient (uses cheaper model for date extraction)
+- 🎯 Only includes articles with dates within your specified range
 
-## Notes
+## 🔑 API Keys
 
-- All API keys are configured in `constants.py`
-- The application will work with any combination of available APIs
-- Without API keys, the application will use basic search functionality
+The application requires at least one of the following API configurations:
+
+- **OpenAI** (Required): For AI-powered curation and summarization
+- **PubMed Email** (Recommended): For accessing PubMed medical literature
+- **Tavily** (Optional): For enhanced web search capabilities
+- **Exa** (Optional): For neural search functionality
+- **NewsAPI** (Optional): For pharmaceutical news articles
+
+## 🧪 Tech Stack
+
+- **Backend**: Python 3.7+, Flask
+- **AI/ML**: OpenAI GPT-4o-mini
+- **APIs**: PubMed, Exa, Tavily, NewsAPI
+- **Data Processing**: Pandas-compatible CSV export
+
+## 📝 Notes
+
+- API keys are stored in `constants.py` (git-ignored for security)
+- The application works with any combination of available APIs
+- Without API keys, basic search functionality will be available
 - Results are temporarily stored in memory for CSV export
+- Default date range uses today as end date and 7 days prior as start date
 
-## License
+## 🔒 Security
+
+- Never commit `constants.py` to version control
+- Use `constants.py.example` as a template
+- Keep your API keys secure and private
+
+## 📄 License
 
 Private project - All rights reserved

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 from config import Config
+from difflib import SequenceMatcher
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,10 +47,15 @@ class DateExtractionAgent:
         self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
         
     def extract_date(self, article: Dict[str, Any]) -> Optional[datetime]:
-        """Extract date from article using multiple strategies"""
+        """Extract date from article using multiple strategies with full context"""
         title = article.get('title', '')
         content = article.get('content', '')
         raw_date = article.get('date', '')
+        url = article.get('url', '')
+        # Build metadata string from article fields
+        metadata = f"Source: {article.get('source', 'Unknown')}"
+        if article.get('authors'):
+            metadata += f" | Authors: {article.get('authors', '')[:200]}"
         
         # Strategy 1: Parse existing date if available
         if raw_date:
@@ -61,14 +67,14 @@ class DateExtractionAgent:
             except Exception as e:
                 logger.debug(f"Failed to parse metadata date: {e}")
         
-        # Strategy 2: Extract from content using LLM
-        extracted_date = self._llm_extract_date(title, content)
+        # Strategy 2: Extract from content using LLM with full context (URL, content, metadata)
+        extracted_date = self._llm_extract_date(title, content, url, metadata)
         if extracted_date and self._is_valid_date(extracted_date):
             logger.debug(f"✅ LLM extracted date: {extracted_date.date()}")
             return extracted_date
             
-        # Strategy 3: Regex patterns as fallback
-        extracted_date = self._regex_extract_date(title, content)
+        # Strategy 3: Regex patterns as fallback (including URL patterns)
+        extracted_date = self._regex_extract_date(title, content, url)
         if extracted_date and self._is_valid_date(extracted_date):
             logger.debug(f"✅ Regex extracted date: {extracted_date.date()}")
             return extracted_date
@@ -100,22 +106,29 @@ class DateExtractionAgent:
                 continue
         return None
     
-    def _llm_extract_date(self, title: str, content: str) -> Optional[datetime]:
-        """Use LLM to extract publication date from content"""
+    def _llm_extract_date(self, title: str, content: str, url: str = "", metadata: str = "") -> Optional[datetime]:
+        """Use fast LLM to extract publication date from complete article context"""
         try:
+            # Build comprehensive context with URL, metadata, and full content
             article_context = f"""
 ARTICLE FOR DATE EXTRACTION:
 
-Title: {title[:300]}
+URL: {url[:200] if url else "N/A"}
 
-Content (first 1500 characters):
-{content[:1500]}
+Title: {title[:500]}
+
+Content (first 3000 characters):
+{content[:3000]}
+
+Metadata/Additional Info:
+{metadata[:500] if metadata else "N/A"}
 
 CONTEXT:
 - This is a pharmaceutical/medical research article
 - We need to find the publication or release date
-- Look for explicit dates in the text
-- Common patterns: "Published on", "Posted", "Released", "Date:", timestamps, etc.
+- Look for explicit dates in the URL, title, content, or metadata
+- Common patterns: "Published on", "Posted", "Released", "Date:", timestamps, dates in URL path, etc.
+- The URL often contains the publication date (e.g., /2024/03/15/ or /20240315/)
 """
             
             system_prompt = """You are a date extraction specialist. Your job is to find publication dates in medical and pharmaceutical articles.
@@ -128,16 +141,19 @@ Do not include any other text, explanation, or formatting."""
 TASK: Extract the publication date from this article.
 
 INSTRUCTIONS:
-1. Look for explicit dates in the content (publication date, posted date, release date)
-2. Prefer dates near the beginning or end of the content
-3. Only return dates that are clearly publication dates (not study dates, approval dates, etc. unless that's all you can find)
-4. Format: YYYY-MM-DD (e.g., 2024-03-15)
-5. If no date found: return exactly "none"
+1. Check URL first - often contains date (e.g., /2024/03/15/ or /20240315/)
+2. Look for explicit dates in content (publication date, posted date, release date)
+3. Check title and metadata for dates
+4. Prefer dates near the beginning or end of the content
+5. Only return dates that are clearly publication dates
+6. Format: YYYY-MM-DD (e.g., 2024-03-15)
+7. If no date found: return exactly "none"
 
 Return ONLY the date or "none"."""
             
+            # Use faster, cheaper model for date extraction
             response = self.openai_client.chat.completions.create(
-                model=self.config.OPENAI_MODEL,
+                model=self.config.DATE_EXTRACTION_MODEL,  # Use gpt-3.5-turbo instead
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -148,18 +164,26 @@ Return ONLY the date or "none"."""
             
             date_str = response.choices[0].message.content.strip().lower()
             if date_str != "none" and date_str:
-                return self._parse_date_string(date_str)
+                extracted_date = self._parse_date_string(date_str)
+                if extracted_date:
+                    logger.info(f"✅ LLM extracted date {extracted_date.date()} from content: {title[:60]}...")
+                    return extracted_date
                 
         except Exception as e:
             logger.debug(f"LLM date extraction failed: {e}")
             
         return None
     
-    def _regex_extract_date(self, title: str, content: str) -> Optional[datetime]:
-        """Extract date using regex patterns"""
-        text_to_search = (title + " " + content)[:1500]
+    def _regex_extract_date(self, title: str, content: str, url: str = "") -> Optional[datetime]:
+        """Extract date using regex patterns from title, content, and URL"""
+        # Include URL in the search text - dates are often in URL paths
+        text_to_search = (url + " " + title + " " + content)[:2000]
         
         date_patterns = [
+            # URL-specific patterns (e.g., /2024/03/15/ or /20240315/)
+            (r'/(\d{4})/(\d{1,2})/(\d{1,2})/', '%Y-%m-%d'),
+            (r'/(\d{8})/', '%Y%m%d'),  # /20240315/
+            # Standard date formats
             (r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', '%Y-%m-%d'),
             (r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})', '%B %d %Y'),
             (r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2}),?\s+(\d{4})', '%b %d %Y'),
@@ -176,9 +200,17 @@ Return ONLY the date or "none"."""
                 try:
                     if '%B' in date_format or '%b' in date_format:
                         date_str = ' '.join(match.groups())
+                    elif date_format == '%Y%m%d':
+                        # Handle /20240315/ format
+                        date_str = match.group(1)
                     else:
-                        if pattern.startswith(r'(\d{4})'):
-                            date_str = f"{match.group(1)}-{match.group(2).zfill(2)}-{match.group(3).zfill(2)}"
+                        if pattern.startswith(r'(\d{4})') or pattern.startswith(r'/(\d{4})'):
+                            # Handle YYYY-MM-DD or /YYYY/MM/DD/ formats
+                            groups = match.groups()
+                            if len(groups) >= 3:
+                                date_str = f"{groups[0]}-{groups[1].zfill(2)}-{groups[2].zfill(2)}"
+                            else:
+                                date_str = ' '.join(groups)
                         else:
                             date_str = ' '.join(match.groups())
                     
@@ -366,6 +398,83 @@ class MultiAgentPharmaAgent:
         # Import the existing data collection logic
         from pharma_agent import PharmaNewsAgent
         self.data_collector = PharmaNewsAgent()
+    
+    def _calculate_title_similarity(self, title1: str, title2: str) -> float:
+        """Calculate similarity between two titles using SequenceMatcher"""
+        return SequenceMatcher(None, title1.lower(), title2.lower()).ratio()
+    
+    def _deduplicate_articles(self, articles: List[Dict[str, Any]], similarity_threshold: float = 0.75) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """
+        Remove near-duplicate articles, keeping the one with most information
+        
+        Args:
+            articles: List of article dictionaries
+            similarity_threshold: Similarity ratio above which articles are considered duplicates (0.0-1.0)
+        
+        Returns:
+            Tuple of (deduplicated articles, stats dict)
+        """
+        if not articles:
+            return articles, {'duplicates_removed': 0, 'unique_articles': 0}
+        
+        logger.info(f"🔄 Starting deduplication of {len(articles)} articles...")
+        
+        deduplicated = []
+        seen_groups = []  # List of lists, each inner list contains similar articles
+        
+        for article in articles:
+            title = article.get('title', '')
+            if not title:
+                deduplicated.append(article)
+                continue
+            
+            # Find if this article is similar to any existing group
+            found_group = False
+            for group in seen_groups:
+                # Compare with first article in group (representative)
+                representative = group[0]
+                similarity = self._calculate_title_similarity(title, representative.get('title', ''))
+                
+                if similarity >= similarity_threshold:
+                    # Add to existing group
+                    group.append(article)
+                    found_group = True
+                    break
+            
+            if not found_group:
+                # Create new group
+                seen_groups.append([article])
+        
+        # From each group, keep the article with most information
+        for group in seen_groups:
+            if len(group) == 1:
+                deduplicated.append(group[0])
+            else:
+                # Select best article from group based on:
+                # 1. Content length (more content = more information)
+                # 2. If content is similar, prefer the one with more metadata
+                best_article = max(group, key=lambda a: (
+                    len(a.get('content') or ''),
+                    len(a.get('authors') or ''),
+                    len(a.get('url') or '')
+                ))
+                deduplicated.append(best_article)
+                
+                # Log deduplication
+                titles = [a.get('title', '')[:60] + '...' for a in group]
+                logger.info(f"📋 Deduplicated {len(group)} similar articles, kept: {best_article.get('title', '')[:60]}...")
+        
+        duplicates_removed = len(articles) - len(deduplicated)
+        stats = {
+            'duplicates_removed': duplicates_removed,
+            'unique_articles': len(deduplicated),
+            'duplicate_groups': len([g for g in seen_groups if len(g) > 1])
+        }
+        
+        logger.info(f"✅ Deduplication complete: {duplicates_removed} duplicates removed, {len(deduplicated)} unique articles remain")
+        print(f"🔄 DEDUPLICATION: Removed {duplicates_removed} duplicates, kept {len(deduplicated)} unique articles")
+        
+        return deduplicated, stats
         
     async def execute_workflow(self, keywords: List[str], start_date: datetime, 
                              end_date: datetime, search_type: str = 'standard',
@@ -373,7 +482,7 @@ class MultiAgentPharmaAgent:
         """Execute the complete multi-agent workflow"""
         
         if search_engines is None:
-            search_engines = ['pubmed', 'exa', 'tavily']
+            search_engines = ['pubmed', 'exa', 'tavily', 'newsapi']
         
         logger.info("🚀 Starting Multi-Agent Pharma Research Workflow")
         logger.info(f"Keywords: {keywords}")
@@ -418,6 +527,14 @@ class MultiAgentPharmaAgent:
             logger.info(f"✅ Collected {len(raw_articles)} articles from {len(raw_data)} sources")
             print(f"✅ DATA COLLECTION COMPLETE: {len(raw_articles)} articles from {list(raw_data.keys())}")
             
+            # Step 1.5: Deduplicate articles (remove near-duplicates)
+            logger.info("🔄 Step 1.5: Deduplicating articles...")
+            print("🔄 DEDUPLICATION AGENT: Removing near-duplicate articles...")
+            raw_articles, dedup_stats = self._deduplicate_articles(raw_articles, similarity_threshold=0.75)
+            
+            workflow_results['metadata']['workflow_stats']['deduplication'] = dedup_stats
+            logger.info(f"✅ Deduplication complete: {dedup_stats}")
+            
             # Step 2: Extract dates
             logger.info("📅 Step 2: Extracting dates from articles...")
             print("📅 DATE EXTRACTION AGENT: Processing article dates...")
@@ -450,23 +567,33 @@ class MultiAgentPharmaAgent:
             print(f"✅ DATE EXTRACTION COMPLETE: {date_stats['with_dates']} with dates, {date_stats['without_dates']} without")
             
             # Step 3: Filter by date range
+            # Note: Articles without dates were processed by LLM in Step 2
+            # If LLM found a date in content/URL/metadata, the article has extracted_date
+            # Only articles where LLM couldn't find ANY date are filtered out here
             logger.info("🗓️ Step 3: Filtering articles by date range...")
             filtered_articles = []
-            date_filter_stats = {"in_range": 0, "out_of_range": 0, "no_date": 0}
+            date_filter_stats = {"in_range": 0, "out_of_range": 0, "no_date": 0, "llm_rescued": 0}
             
             for article in articles:
                 if not article.extracted_date:
                     date_filter_stats["no_date"] += 1
+                    logger.debug(f"❌ Discarding article (no date after LLM extraction): {article.title[:60]}...")
                     continue
                     
                 if start_date <= article.extracted_date <= end_date:
                     filtered_articles.append(article)
                     date_filter_stats["in_range"] += 1
+                    # Track articles that were saved by LLM date extraction
+                    if not article.raw_date:
+                        date_filter_stats["llm_rescued"] += 1
+                        logger.info(f"✅ LLM rescued article with extracted date: {article.title[:60]}...")
                 else:
                     date_filter_stats["out_of_range"] += 1
+                    logger.debug(f"📅 Article date {article.extracted_date.date()} outside range: {article.title[:60]}...")
             
             workflow_results['metadata']['workflow_stats']['date_filtering'] = date_filter_stats
             logger.info(f"✅ Date filtering complete: {date_filter_stats}")
+            print(f"✅ DATE FILTERING COMPLETE: {date_filter_stats['in_range']} in range, {date_filter_stats['llm_rescued']} rescued by LLM date extraction")
             
             # Step 4: Analyze relevance
             logger.info("🎯 Step 4: Analyzing article relevance...")

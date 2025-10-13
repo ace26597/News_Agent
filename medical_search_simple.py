@@ -1096,6 +1096,10 @@ HTML_TEMPLATE = """
                         <input type="checkbox" id="engine-tavily" checked>
                         Tavily (Web Search)
                     </label>
+                    <label>
+                        <input type="checkbox" id="engine-newsapi" checked>
+                        NewsAPI (News)
+                    </label>
                 </div>
             </div>
 
@@ -1112,6 +1116,91 @@ HTML_TEMPLATE = """
                 <div class="stat-item">
                     <span>Exa:</span>
                     <span id="api-exa">...</span>
+                </div>
+                <div class="stat-item">
+                    <span>NewsAPI:</span>
+                    <span id="api-newsapi">...</span>
+                </div>
+            </div>
+
+            <!-- Data Collection Stats -->
+            <div class="sidebar-section" id="collection-stats" style="display:none;">
+                <h3>📥 Data Collection</h3>
+                <div class="stat-item">
+                    <span>Total Collected:</span>
+                    <span class="stat-value" id="stat-collected">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Sources Used:</span>
+                    <span class="stat-value" id="stat-sources-list">-</span>
+                </div>
+            </div>
+
+            <!-- Deduplication Stats -->
+            <div class="sidebar-section" id="dedup-stats" style="display:none;">
+                <h3>🔄 Deduplication</h3>
+                <div class="stat-item">
+                    <span>Duplicates Removed:</span>
+                    <span class="stat-value" id="stat-duplicates">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Unique Articles:</span>
+                    <span class="stat-value" id="stat-unique">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Duplicate Groups:</span>
+                    <span class="stat-value" id="stat-dup-groups">0</span>
+                </div>
+            </div>
+
+            <!-- Date Extraction Stats -->
+            <div class="sidebar-section" id="date-stats" style="display:none;">
+                <h3>📅 Date Extraction</h3>
+                <div class="stat-item">
+                    <span>With Dates:</span>
+                    <span class="stat-value" id="stat-with-dates">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Without Dates:</span>
+                    <span class="stat-value" id="stat-without-dates">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>LLM Extracted:</span>
+                    <span class="stat-value" id="stat-extracted-dates">0</span>
+                </div>
+            </div>
+
+            <!-- Date Filtering Stats -->
+            <div class="sidebar-section" id="filter-stats" style="display:none;">
+                <h3>🗓️ Date Filtering</h3>
+                <div class="stat-item">
+                    <span>In Range:</span>
+                    <span class="stat-value" id="stat-in-range">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Out of Range:</span>
+                    <span class="stat-value" id="stat-out-range">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>LLM Rescued:</span>
+                    <span class="stat-value" id="stat-llm-rescued">0</span>
+                </div>
+            </div>
+
+            <!-- Relevance Analysis Stats -->
+            <div class="sidebar-section" id="relevance-stats" style="display:none;">
+                <h3>🎯 Relevance Analysis</h3>
+                <div class="stat-item">
+                    <span>Analyzed:</span>
+                    <span class="stat-value" id="stat-analyzed">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Kept (≥ score):</span>
+                    <span class="stat-value" id="stat-kept">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Filtered:</span>
+                    <span class="stat-value" id="stat-filtered">0</span>
                 </div>
             </div>
         </div>
@@ -1206,8 +1295,34 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- Right Sidebar - Activity Panel -->
+        <!-- Right Sidebar - Filters & Activity Panel -->
         <div class="right-sidebar">
+            <!-- Relevance Score Filter -->
+            <div class="sidebar-section" id="relevance-filter-section" style="display:none;">
+                <h3>🎚️ Relevance Filter</h3>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 12px; color: #7f8c8d;">Min Score: <span id="slider-value">50</span></label>
+                    <input type="range" id="relevance-slider" min="0" max="100" value="50" 
+                           style="width: 100%; margin-top: 5px;">
+                </div>
+                <div class="stat-item">
+                    <span>Shown:</span>
+                    <span class="stat-value" id="stat-shown-count">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Hidden:</span>
+                    <span class="stat-value" id="stat-hidden-count">0</span>
+                </div>
+            </div>
+
+            <!-- Source Breakdown -->
+            <div class="sidebar-section" id="source-breakdown" style="display:none;">
+                <h3>📊 Source Breakdown</h3>
+                <div id="source-stats-container">
+                    <!-- Will be populated dynamically -->
+                </div>
+            </div>
+
             <div class="activity-header">
                 <span class="status-indicator status-idle" id="status-indicator"></span>
                 Live Activity
@@ -1315,6 +1430,7 @@ HTML_TEMPLATE = """
             if (document.getElementById('engine-pubmed').checked) engines.push('pubmed');
             if (document.getElementById('engine-exa').checked) engines.push('exa');
             if (document.getElementById('engine-tavily').checked) engines.push('tavily');
+            if (document.getElementById('engine-newsapi').checked) engines.push('newsapi');
             return engines;
         }
 
@@ -1396,6 +1512,17 @@ HTML_TEMPLATE = """
                     document.getElementById('stat-sources').textContent = sourcesUsed.size;
 
                     addActivity(`Found ${data.results.length} results`, 'success');
+                    
+                    // Update workflow stats if available
+                    if (data.workflow_stats) {
+                        updateWorkflowStats(data.workflow_stats);
+                    }
+                    
+                    // Update source breakdown
+                    if (data.results_by_source) {
+                        updateSourceBreakdown(data.results_by_source);
+                    }
+                    
                     displayResults(data);
                 }
             } catch (error) {
@@ -1409,6 +1536,112 @@ HTML_TEMPLATE = """
                 document.getElementById('status-indicator').className = 'status-indicator status-idle';
             }
         }
+
+        // Update workflow statistics
+        function updateWorkflowStats(stats) {
+            // Data Collection Stats
+            if (stats.data_collection) {
+                document.getElementById('collection-stats').style.display = 'block';
+                document.getElementById('stat-collected').textContent = stats.data_collection.total_collected || 0;
+                document.getElementById('stat-sources-list').textContent = 
+                    (stats.data_collection.sources_used || []).join(', ') || 'None';
+            }
+            
+            // Deduplication Stats
+            if (stats.deduplication) {
+                document.getElementById('dedup-stats').style.display = 'block';
+                document.getElementById('stat-duplicates').textContent = stats.deduplication.duplicates_removed || 0;
+                document.getElementById('stat-unique').textContent = stats.deduplication.unique_articles || 0;
+                document.getElementById('stat-dup-groups').textContent = stats.deduplication.duplicate_groups || 0;
+            }
+            
+            // Date Extraction Stats
+            if (stats.date_extraction) {
+                document.getElementById('date-stats').style.display = 'block';
+                document.getElementById('stat-with-dates').textContent = stats.date_extraction.with_dates || 0;
+                document.getElementById('stat-without-dates').textContent = stats.date_extraction.without_dates || 0;
+                document.getElementById('stat-extracted-dates').textContent = stats.date_extraction.extracted_dates || 0;
+            }
+            
+            // Date Filtering Stats
+            if (stats.date_filtering) {
+                document.getElementById('filter-stats').style.display = 'block';
+                document.getElementById('stat-in-range').textContent = stats.date_filtering.in_range || 0;
+                document.getElementById('stat-out-range').textContent = stats.date_filtering.out_of_range || 0;
+                document.getElementById('stat-llm-rescued').textContent = stats.date_filtering.llm_rescued || 0;
+            }
+            
+            // Relevance Analysis Stats
+            if (stats.relevance_analysis || stats.relevance_filtering) {
+                document.getElementById('relevance-stats').style.display = 'block';
+                document.getElementById('stat-analyzed').textContent = 
+                    (stats.relevance_analysis && stats.relevance_analysis.analyzed) || 0;
+                document.getElementById('stat-kept').textContent = 
+                    (stats.relevance_filtering && stats.relevance_filtering.kept) || 0;
+                document.getElementById('stat-filtered').textContent = 
+                    (stats.relevance_filtering && stats.relevance_filtering.filtered) || 0;
+            }
+        }
+
+        // Update source breakdown
+        function updateSourceBreakdown(results_by_source) {
+            const container = document.getElementById('source-stats-container');
+            let html = '';
+            
+            Object.keys(results_by_source).forEach(source => {
+                if (source !== 'metadata') {
+                    const count = Array.isArray(results_by_source[source]) ? 
+                        results_by_source[source].length : 
+                        (results_by_source[source].articles ? results_by_source[source].articles.length : 0);
+                    
+                    html += `
+                        <div class="stat-item">
+                            <span>${source.charAt(0).toUpperCase() + source.slice(1)}:</span>
+                            <span class="stat-value">${count}</span>
+                        </div>
+                    `;
+                }
+            });
+            
+            container.innerHTML = html;
+            document.getElementById('source-breakdown').style.display = 'block';
+        }
+
+        // Store all results globally for filtering
+        let allResults = [];
+        let currentMinScore = 50;
+
+        // Filter results by relevance score
+        function filterByRelevanceScore(minScore) {
+            currentMinScore = minScore;
+            const resultCards = document.querySelectorAll('.result-card');
+            let shownCount = 0;
+            let hiddenCount = 0;
+            
+            resultCards.forEach(card => {
+                const score = parseInt(card.dataset.relevanceScore || '0');
+                if (score >= minScore) {
+                    card.style.display = 'block';
+                    shownCount++;
+                } else {
+                    card.style.display = 'none';
+                    hiddenCount++;
+                }
+            });
+            
+            document.getElementById('stat-shown-count').textContent = shownCount;
+            document.getElementById('stat-hidden-count').textContent = hiddenCount;
+        }
+
+        // Setup relevance slider
+        const relevanceSlider = document.getElementById('relevance-slider');
+        const sliderValue = document.getElementById('slider-value');
+        
+        relevanceSlider.addEventListener('input', (e) => {
+            const value = e.target.value;
+            sliderValue.textContent = value;
+            filterByRelevanceScore(parseInt(value));
+        });
 
         // Display results
         function displayResults(data) {
@@ -1452,7 +1685,7 @@ HTML_TEMPLATE = """
                 ).join('');
                 
                 html += `
-                    <div class="result-card enhanced-result">
+                    <div class="result-card enhanced-result" data-relevance-score="${relevanceScore}">
                         <div class="result-header">
                             <div class="result-title">
                                 <a href="${result.url}" target="_blank">${result.title}</a>
@@ -1505,6 +1738,12 @@ HTML_TEMPLATE = """
             });
 
             resultsArea.innerHTML = html;
+            
+            // Show relevance filter section
+            document.getElementById('relevance-filter-section').style.display = 'block';
+            
+            // Apply current filter
+            filterByRelevanceScore(currentMinScore);
         }
 
         // CSV Upload
@@ -1575,28 +1814,28 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Check API status on load
-        fetch('/search', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                keywords: 'test',
-                start_date: '2024-01-01',
-                end_date: '2024-01-02',
-                search_type: 'standard',
-                search_engines: []
-            })
+        // API status check - commented out to prevent auto-search on page load
+        // Uncomment and use /health endpoint instead if needed
+        /*
+        fetch('/health', {
+            method: 'GET',
         }).then(r => r.json()).then(data => {
-            // This will fail but we can check the response
-            // In a real implementation, we'd have a dedicated /api/status endpoint
+            // Update API status indicators from backend response
+            if (data.api_status) {
+                document.getElementById('api-openai').innerHTML = data.api_status.openai_configured ? '✅' : '❌';
+                document.getElementById('api-tavily').innerHTML = data.api_status.tavily_configured ? '✅' : '❌';
+                document.getElementById('api-exa').innerHTML = data.api_status.exa_configured ? '✅' : '❌';
+            }
         }).catch(() => {
-            // Expected to fail
+            console.log('Could not fetch API status');
         });
+        */
 
         // Mark APIs as configured (placeholder - should come from backend)
         document.getElementById('api-openai').innerHTML = '✅';
         document.getElementById('api-tavily').innerHTML = '✅';
         document.getElementById('api-exa').innerHTML = '✅';
+        document.getElementById('api-newsapi').innerHTML = '✅';
     </script>
 </body>
 </html>
@@ -1753,6 +1992,11 @@ def search():
             oldest_session = min(search_results_store.keys())
             del search_results_store[oldest_session]
         
+        # Extract workflow stats if available
+        workflow_stats = {}
+        if AGENT_AVAILABLE and pharma_agent and workflow_result:
+            workflow_stats = workflow_result.get('metadata', {}).get('workflow_stats', {})
+        
         return jsonify({
             'success': True,
             'results': processed_results,
@@ -1761,6 +2005,7 @@ def search():
             'total_filtered': total_filtered,
             'total_processed': total_processed,
             'session_id': session_id,
+            'workflow_stats': workflow_stats,  # Add workflow stats
             'search_metadata': {
                 'keywords': keywords,
                 'search_type': search_type,

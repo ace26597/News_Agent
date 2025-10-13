@@ -325,7 +325,7 @@ class PharmaNewsAgent:
         
         # Set default search engines if not provided
         if search_engines is None:
-            search_engines = ['pubmed', 'exa', 'tavily']
+            search_engines = ['pubmed', 'exa', 'tavily', 'newsapi']
         
         # First attempt with original keywords
         logger.info(f"🔍 First attempt with original keywords: {keywords}")
@@ -387,6 +387,27 @@ class PharmaNewsAgent:
             print(f"DEBUG: Tavily skipped - not selected")
             raw_data['tavily'] = []
         
+        # NewsAPI (requires API key)
+        if 'newsapi' in search_engines and self.api_status['newsapi_configured']:
+            try:
+                logger.info("🗞️ Searching NewsAPI...")
+                print(f"DEBUG: NewsAPI API status: {self.api_status['newsapi_configured']}")
+                raw_data['newsapi'] = self._search_newsapi(keywords, start_date, end_date)
+                logger.info(f"✅ NewsAPI: {len(raw_data['newsapi'])} articles")
+            except Exception as e:
+                logger.error(f"❌ NewsAPI error: {str(e)}")
+                raw_data['newsapi'] = []
+                errors['newsapi'] = str(e)
+        elif 'newsapi' in search_engines:
+            logger.warning("⚠️ NewsAPI not configured - skipping")
+            print(f"DEBUG: NewsAPI not configured - API key missing")
+            raw_data['newsapi'] = []
+            errors['newsapi'] = "API key not configured"
+        else:
+            logger.info("⏭️ NewsAPI skipped - not selected")
+            print(f"DEBUG: NewsAPI skipped - not selected")
+            raw_data['newsapi'] = []
+        
         # Check if we have any data at all
         total_articles = sum(len(articles) for articles in raw_data.values())
         
@@ -429,6 +450,17 @@ class PharmaNewsAgent:
                             logger.info(f"✅ Tavily (expanded): {len(expanded_tavily)} articles")
                     except Exception as e:
                         logger.error(f"❌ Tavily expanded search error: {str(e)}")
+                
+                # NewsAPI with expanded terms
+                if self.api_status['newsapi_configured']:
+                    try:
+                        logger.info("🗞️ Searching NewsAPI with expanded terms...")
+                        expanded_newsapi = self._search_newsapi(expanded_keywords, start_date, end_date)
+                        if expanded_newsapi:
+                            raw_data['newsapi'] = expanded_newsapi
+                            logger.info(f"✅ NewsAPI (expanded): {len(expanded_newsapi)} articles")
+                    except Exception as e:
+                        logger.error(f"❌ NewsAPI expanded search error: {str(e)}")
         
         # Final check - if still no results, add fallback data
         total_articles = sum(len(articles) for articles in raw_data.values())
@@ -1295,6 +1327,82 @@ class PharmaNewsAgent:
             
         except Exception as e:
             logger.error(f"❌ Tavily query execution error: {str(e)}")
+            return []
+    
+    def _search_newsapi(self, keywords: List[str], start_date: datetime, 
+                       end_date: datetime, max_results: int = 50) -> List[Dict[str, Any]]:
+        """Search NewsAPI for pharmaceutical news articles"""
+        try:
+            import requests
+            
+            logger.info(f"🗞️ Starting NewsAPI search with keywords: {keywords}")
+            
+            if not self.config.NEWSAPI_KEY:
+                logger.warning("⚠️ NewsAPI key not configured")
+                return []
+            
+            # Prepare search query - combine keywords
+            query = ' OR '.join([f'"{kw}"' for kw in keywords[:5]])  # Limit to 5 keywords for NewsAPI
+            
+            # NewsAPI parameters
+            params = {
+                'q': query,
+                'apiKey': self.config.NEWSAPI_KEY,
+                'language': 'en',
+                'sortBy': 'publishedAt',
+                'pageSize': min(max_results, 100),  # NewsAPI max is 100
+                'from': start_date.strftime('%Y-%m-%d'),
+                'to': end_date.strftime('%Y-%m-%d')
+            }
+            
+            # Use everything endpoint for broader search
+            url = 'https://newsapi.org/v2/everything'
+            
+            logger.info(f"📡 Making NewsAPI request with query: {query}")
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code != 200:
+                logger.error(f"❌ NewsAPI error: {response.status_code} - {response.text}")
+                return []
+            
+            data = response.json()
+            articles = data.get('articles', [])
+            
+            logger.info(f"📊 NewsAPI returned {len(articles)} articles")
+            
+            results = []
+            for article in articles:
+                try:
+                    # Parse publication date
+                    pub_date = datetime.now()
+                    if article.get('publishedAt'):
+                        try:
+                            pub_date = datetime.fromisoformat(article['publishedAt'].replace('Z', '+00:00'))
+                            if pub_date.tzinfo:
+                                pub_date = pub_date.replace(tzinfo=None)
+                        except Exception as date_error:
+                            logger.warning(f"Could not parse NewsAPI date '{article.get('publishedAt')}': {date_error}")
+                    
+                    # Check if within date range
+                    if start_date <= pub_date <= end_date:
+                        results.append({
+                            'title': article.get('title', 'No Title'),
+                            'content': article.get('description', '') + '\n\n' + (article.get('content', '') or ''),
+                            'url': article.get('url', ''),
+                            'date': pub_date.isoformat(),
+                            'source': 'NewsAPI',
+                            'authors': article.get('author', ''),
+                            'published_date': article.get('publishedAt', '')
+                        })
+                except Exception as item_error:
+                    logger.error(f"Error processing NewsAPI article: {item_error}")
+                    continue
+            
+            logger.info(f"✅ NewsAPI search completed: {len(results)} results within date range")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ NewsAPI search error: {str(e)}")
             return []
     
     def _extract_source_name(self, url: str) -> str:

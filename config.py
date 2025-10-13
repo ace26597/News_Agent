@@ -36,7 +36,8 @@ class Config:
     DEFAULT_DATE_RANGE_DAYS = getattr(constants, 'DEFAULT_DATE_RANGE_DAYS', 7) if constants else 7
     
     # LLM settings for curation
-    OPENAI_MODEL = getattr(constants, 'OPENAI_MODEL', "gpt-4.1-mini") if constants else "gpt-4.1-mini"
+    OPENAI_MODEL = getattr(constants, 'OPENAI_MODEL', "gpt-4o-mini") if constants else "gpt-4o-mini"
+    DATE_EXTRACTION_MODEL = getattr(constants, 'DATE_EXTRACTION_MODEL', "gpt-3.5-turbo") if constants else "gpt-3.5-turbo"
     MAX_TOKENS = getattr(constants, 'MAX_TOKENS', 1000) if constants else 1000
     TEMPERATURE = getattr(constants, 'TEMPERATURE', 0.0) if constants else 0.0
     

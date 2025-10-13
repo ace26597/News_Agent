@@ -26,7 +26,8 @@ MAX_RESULTS_PER_SOURCE = 50
 DEFAULT_DATE_RANGE_DAYS = 7
 
 # LLM Configuration
-OPENAI_MODEL = "gpt-4o-mini"  # or "gpt-4", "gpt-3.5-turbo"
+OPENAI_MODEL = "gpt-4o-mini"  # Main model for curation and analysis
+DATE_EXTRACTION_MODEL = "gpt-3.5-turbo"  # Faster/cheaper model for date extraction from articles
 MAX_TOKENS = 3000
 TEMPERATURE = 0.0
 
