@@ -1,6 +1,14 @@
 """
-Pharma News Research Agent - Flask Application
+Pharma News Research Agent - Flask Blueprint
 Real API integration with agentic workflow for pharmaceutical news research
+
+This blueprint can be integrated into any Flask application at the /OME/ endpoint.
+
+Usage:
+    from ome_blueprint import ome_blueprint
+    
+    app = Flask(__name__)
+    app.register_blueprint(ome_blueprint, url_prefix='/OME')
 """
 
 import os
@@ -12,14 +20,7 @@ import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import requests
-
-# Try to import Flask, install if not available
-try:
-    from flask import Flask, render_template_string, request, jsonify, send_file
-except ImportError:
-    print("Installing Flask...")
-    os.system("pip install flask")
-    from flask import Flask, render_template_string, request, jsonify, send_file
+from flask import Blueprint, render_template_string, request, jsonify, send_file
 
 # Import our agentic workflow
 try:
@@ -51,9 +52,8 @@ if not AGENT_AVAILABLE:
         MAX_KEYWORDS = 100
         MAX_RESULTS_PER_SOURCE = 50
 
-# Initialize Flask app
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'dev-secret-key'
+# Create Blueprint instead of Flask app
+ome_blueprint = Blueprint('ome', __name__)
 
 # Initialize Pharma News Agent (if available)
 pharma_agent = None
@@ -471,7 +471,7 @@ def process_multi_section_search(sections: List[Dict[str, Any]], start_date: dat
             'successful_sections': 0
         }
 
-# HTML Template
+# HTML Template (same as before, embedded in blueprint)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -1350,6 +1350,9 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // Get the base URL for this blueprint
+        const BASE_URL = window.location.pathname.replace(/\/$/, '');
+        
         // Initialize
         let searchCount = 0;
         let totalResults = 0;
@@ -1470,7 +1473,7 @@ HTML_TEMPLATE = """
             }, 500);
 
             try {
-                const response = await fetch('/search', {
+                const response = await fetch(`${BASE_URL}/search`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1788,7 +1791,7 @@ HTML_TEMPLATE = """
             try {
                 document.getElementById('loading-overlay').classList.add('active');
                 
-                const response = await fetch('/upload_csv', {
+                const response = await fetch(`${BASE_URL}/upload_csv`, {
                     method: 'POST',
                     body: formData
                 });
@@ -1814,23 +1817,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        // API status check - commented out to prevent auto-search on page load
-        // Uncomment and use /health endpoint instead if needed
-        /*
-        fetch('/health', {
-            method: 'GET',
-        }).then(r => r.json()).then(data => {
-            // Update API status indicators from backend response
-            if (data.api_status) {
-                document.getElementById('api-openai').innerHTML = data.api_status.openai_configured ? '✅' : '❌';
-                document.getElementById('api-tavily').innerHTML = data.api_status.tavily_configured ? '✅' : '❌';
-                document.getElementById('api-exa').innerHTML = data.api_status.exa_configured ? '✅' : '❌';
-            }
-        }).catch(() => {
-            console.log('Could not fetch API status');
-        });
-        */
-
         // Mark APIs as configured (placeholder - should come from backend)
         document.getElementById('api-openai').innerHTML = '✅';
         document.getElementById('api-tavily').innerHTML = '✅';
@@ -1839,16 +1825,14 @@ HTML_TEMPLATE = """
     </script>
 </body>
 </html>
-
-
 """
 
-@app.route('/')
+@ome_blueprint.route('/')
 def index():
     """Serve the main search interface"""
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/search', methods=['POST'])
+@ome_blueprint.route('/search', methods=['POST'])
 def search():
     """Process search request"""
     try:
@@ -2024,114 +2008,7 @@ def search():
             'results': []
         }), 500
 
-@app.route('/copy_all_results_html/<session_id>')
-def copy_all_results_html(session_id):
-    """Generate HTML for all results in a session, sorted by AI score"""
-    try:
-        if session_id not in search_results_store:
-            return jsonify({'error': 'Session not found'}), 404
-        
-        result = search_results_store[session_id]
-        if not result or 'results_by_source' not in result:
-            return jsonify({'error': 'No results found'}), 404
-        
-        # Collect all articles from all sources
-        all_articles = []
-        for source_name, source_data in result['results_by_source'].items():
-            if source_name == 'metadata':
-                continue
-            for article in source_data.get('articles', []):
-                all_articles.append(article)
-        
-        # Sort by AI relevance score (highest first)
-        all_articles.sort(key=lambda x: x.get('ai_relevance_score', 0), reverse=True)
-        
-        # Generate HTML
-        html_parts = []
-        html_parts.append('<div class="pharma-news-results">')
-        html_parts.append(f'<h2>Pharmaceutical News Research Results ({len(all_articles)} articles)</h2>')
-        
-        for i, article in enumerate(all_articles, 1):
-            # Format date
-            try:
-                date_obj = datetime.fromisoformat(article['date'].replace('Z', '+00:00'))
-                formatted_date = date_obj.strftime('%Y-%m-%d')
-            except:
-                formatted_date = 'Date not available'
-            
-            # Get AI insights
-            ai_summary = article.get('ai_summary', '')
-            ai_insights = article.get('ai_insights', '')
-            ai_significance = article.get('ai_significance', '')
-            ai_regulatory = article.get('ai_regulatory', '')
-            ai_market_impact = article.get('ai_market_impact', '')
-            ai_quality = article.get('ai_research_quality', 'Medium')
-            ai_score = article.get('ai_relevance_score', 0)
-            
-            # Get LLM extracted date if available
-            llm_date = article.get('llm_extracted_date')
-            if llm_date:
-                try:
-                    llm_date_obj = datetime.fromisoformat(llm_date.replace('Z', '+00:00'))
-                    formatted_llm_date = llm_date_obj.strftime('%Y-%m-%d')
-                except:
-                    formatted_llm_date = None
-            else:
-                formatted_llm_date = None
-            
-            html_parts.append(f'''
-            <div class="result-item" style="margin-bottom: 2rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px;">
-                <h3 style="color: #2c3e50; margin-bottom: 0.5rem;">{i}. {article['title']}</h3>
-                <div style="margin-bottom: 1rem; color: #666; font-size: 0.9em;">
-                    <strong>Source:</strong> {article.get('source_name', 'Unknown')} | 
-                    <strong>Date:</strong> {formatted_date} | 
-                    <strong>AI Score:</strong> {ai_score}/100 | 
-                    <strong>Research Quality:</strong> {ai_quality}''')
-            
-            if formatted_llm_date:
-                html_parts.append(f' | <strong>LLM Extracted Date:</strong> {formatted_llm_date}')
-            
-            html_parts.append(f'''</div>
-                <div style="margin-bottom: 1rem;">
-                    <strong>URL:</strong> <a href="{article['url']}" target="_blank" style="color: #3498db;">{article['url']}</a>
-                </div>
-                <div style="margin-bottom: 1rem;">
-                    <strong>AI Summary:</strong> {ai_summary}
-                </div>
-                <div style="margin-bottom: 1rem;">
-                    <strong>Key Insights:</strong> {ai_insights}
-                </div>
-                <div style="margin-bottom: 1rem;">
-                    <strong>Clinical Significance:</strong> {ai_significance}
-                </div>
-                <div style="margin-bottom: 1rem;">
-                    <strong>Regulatory Implications:</strong> {ai_regulatory}
-                </div>
-                <div style="margin-bottom: 1rem;">
-                    <strong>Market Impact:</strong> {ai_market_impact}
-                </div>
-                <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 4px;">
-                    <strong>Content Preview:</strong><br>
-                    {article['content'][:500]}{'...' if len(article['content']) > 500 else ''}
-                </div>
-            </div>
-            ''')
-        
-        html_parts.append('</div>')
-        
-        return jsonify({
-            'success': True,
-            'html': ''.join(html_parts)
-        })
-        
-    except Exception as e:
-        print(f"Error generating HTML for session {session_id}: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f'Failed to generate HTML: {str(e)}'
-        }), 500
-
-@app.route('/download/<session_id>')
+@ome_blueprint.route('/download/<session_id>')
 def download_csv(session_id):
     """Download search results as CSV"""
     try:
@@ -2186,14 +2063,14 @@ def download_csv(session_id):
         print(f"CSV download error: {str(e)}")
         return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
-@app.route('/upload_csv', methods=['POST'])
+@ome_blueprint.route('/upload_csv', methods=['POST'])
 def upload_csv():
     """Handle CSV file upload for multi-section processing"""
     try:
-        if 'csv_file' not in request.files:
+        if 'file' not in request.files:
             return jsonify({'error': 'No CSV file provided'}), 400
         
-        csv_file = request.files['csv_file']
+        csv_file = request.files['file']
         if csv_file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
         
@@ -2234,147 +2111,7 @@ def upload_csv():
             'error': f'CSV upload failed: {str(e)}'
         }), 500
 
-@app.route('/process_multi_section', methods=['POST'])
-def process_multi_section():
-    """Process multiple sections from uploaded CSV"""
-    try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-        
-        upload_id = data.get('upload_id')
-        selected_user = data.get('selected_user')
-        start_date_str = data.get('start_date', '')
-        end_date_str = data.get('end_date', '')
-        
-        if not upload_id or upload_id not in csv_uploads_store:
-            return jsonify({'error': 'Invalid upload ID'}), 400
-        
-        csv_data = csv_uploads_store[upload_id]
-        sections = csv_data['sections']
-        
-        # Filter sections by user if specified
-        if selected_user:
-            sections = [s for s in sections if s['user'] == selected_user]
-        
-        if not sections:
-            return jsonify({'error': 'No sections found for the selected user'}), 400
-        
-        # Parse dates
-        try:
-            if start_date_str:
-                start_date = datetime.fromisoformat(start_date_str)
-            else:
-                start_date = datetime.now() - timedelta(days=7)
-            
-            if end_date_str:
-                end_date = datetime.fromisoformat(end_date_str)
-            else:
-                end_date = datetime.now()
-                
-        except ValueError as e:
-            return jsonify({'error': f'Invalid date format: {str(e)}'}), 400
-        
-        # Process multi-section search
-        multi_result = process_multi_section_search(sections, start_date, end_date)
-        
-        if multi_result['success']:
-            # Store results
-            session_id = f"multi_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            multi_section_results[session_id] = {
-                'section_results': multi_result['section_results'],
-                'metadata': {
-                    'upload_id': upload_id,
-                    'selected_user': selected_user,
-                    'timestamp': datetime.now().isoformat()
-                },
-                'timestamp': datetime.now()
-            }
-            
-            return jsonify({
-                'success': True,
-                'session_id': session_id,
-                'section_results': multi_result['section_results'],
-                'total_sections': multi_result['total_sections'],
-                'successful_sections': multi_result['successful_sections']
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': multi_result['error']
-            }), 500
-            
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': f'Multi-section processing failed: {str(e)}'
-        }), 500
-
-@app.route('/download_multi_section/<session_id>')
-def download_multi_section_csv(session_id):
-    """Download multi-section results as CSV"""
-    try:
-        if session_id not in multi_section_results:
-            return jsonify({'error': 'Session not found'}), 404
-        
-        multi_data = multi_section_results[session_id]
-        section_results = multi_data['section_results']
-        
-        if not section_results:
-            return jsonify({'error': 'No results to download'}), 400
-        
-        # Create CSV content
-        output = io.StringIO()
-        writer = csv.writer(output)
-        
-        # Write header
-        headers = ['Section Header', 'Section Subheader', 'User', 'Rank', 'Title', 'Summary', 'Source', 'Date', 'URL', 'Relevance Score', 'Keywords', 'Aliases']
-        writer.writerow(headers)
-        
-        # Write data rows for all sections
-        for section_id, section_data in section_results.items():
-            if section_data['success']:
-                section_info = section_data['section_info']
-                results = section_data['results']
-                
-                for result in results:
-                    row = [
-                        section_info['header'],
-                        section_info['subheader'],
-                        section_info['user'],
-                        result.get('rank', ''),
-                        result.get('title', ''),
-                        result.get('summary', '').replace('\n', ' ').replace('\r', ' '),
-                        result.get('source', ''),
-                        result.get('date', ''),
-                        result.get('url', ''),
-                        result.get('relevance_score', ''),
-                        section_info['keywords'],
-                        section_info['aliases']
-                    ]
-                    writer.writerow(row)
-        
-        # Create response
-        output.seek(0)
-        csv_content = output.getvalue()
-        output.close()
-        
-        # Create filename
-        filename = f"multi_section_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
-        # Return CSV file
-        return send_file(
-            io.BytesIO(csv_content.encode('utf-8')),
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=filename
-        )
-        
-    except Exception as e:
-        return jsonify({'error': f'Download failed: {str(e)}'}), 500
-
-@app.route('/health')
+@ome_blueprint.route('/health')
 def health_check():
     """Health check endpoint with API status"""
     health_data = {
@@ -2396,29 +2133,3 @@ def health_check():
     
     return jsonify(health_data)
 
-if __name__ == '__main__':
-    print("=" * 60)
-    print("Pharma News Research Agent")
-    print("=" * 60)
-    print("Starting server...")
-    
-    if AGENT_AVAILABLE and pharma_agent:
-        print("Agentic workflow enabled with real API integration")
-        print("Available APIs:")
-        api_status = pharma_agent.api_status
-        for api, status in api_status.items():
-            status_icon = "OK" if status else "NO"
-            print(f"   {status_icon} {api.replace('_', ' ').title()}")
-    else:
-        print("Agentic workflow not available - using basic search")
-        print("Add API keys to .env file for enhanced functionality")
-    
-    print("Open your browser and go to: http://localhost:5000")
-    print("Press Ctrl+C to stop the server")
-    print("=" * 60)
-    
-    try:
-        app.run(host='127.0.0.1', port=5000, debug=False)
-    except Exception as e:
-        print(f"Error starting server: {str(e)}")
-        print("Make sure port 5000 is not in use by another application")

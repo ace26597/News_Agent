@@ -1,8 +1,17 @@
-# Pharma News Research Agent
+# Pharma News Research Agent - Flask Blueprint
 
-An AI-powered pharmaceutical news research application that aggregates and curates content from multiple sources including PubMed, Exa, and Tavily APIs.
+A Flask blueprint for AI-powered pharmaceutical news research with multi-source data collection.
 
-## 🚀 Quick Start
+## Features
+
+- 🔬 Multi-source pharmaceutical news aggregation (PubMed, Exa, Tavily, NewsAPI)
+- 🤖 AI-powered relevance scoring and content analysis
+- 📊 Real-time deduplication and date extraction
+- 📈 Advanced analytics and filtering
+- 💾 CSV export and batch processing
+- 🎯 Customizable search types (standard, title-only, co-occurrence)
+
+## Quick Start
 
 ### 1. Install Dependencies
 
@@ -12,141 +21,115 @@ pip install -r requirements.txt
 
 ### 2. Configure API Keys
 
-Copy the example constants file and add your API keys:
-
-```bash
-cp constants.py.example constants.py
-```
-
-Edit `constants.py` and add your API keys:
-- **OpenAI API Key** (Required for AI-powered curation)
-- **Tavily API Key** (Optional for enhanced web search)
-- **Exa API Key** (Optional for neural search)
-- **NewsAPI Key** (Optional for pharmaceutical news)
-- **PubMed Email** (Required for PubMed API access)
-
-### 3. Run the Application
-
-```bash
-python run_pharma_search.py
-```
-
-The application will start on `http://127.0.0.1:5000`
-
-## 📁 Project Structure
-
-```
-News-Agent/
-├── medical_search_simple.py    # Main Flask web application
-├── pharma_agent.py              # Primary agent implementation
-├── multi_agent_pharma.py        # Multi-agent orchestrator
-├── config.py                    # Configuration management
-├── constants.py                 # API keys and settings (not in git)
-├── constants.py.example         # Example configuration template
-├── run_pharma_search.py         # Application launcher script
-├── requirements.txt             # Python dependencies
-└── README.md                    # This file
-```
-
-## ✨ Features
-
-- 🔍 **Multi-Source Search**: Aggregates from PubMed, Exa, and Tavily APIs
-- 🤖 **AI-Powered Curation**: Uses OpenAI GPT for intelligent content analysis
-- 🧠 **Smart Date Extraction**: Fast LLM extracts dates from URLs, content, and metadata for articles without publication dates
-- 📊 **Multiple Search Strategies**: Standard, Title-based, and Co-occurrence modes
-- 📅 **Date Filtering**: Default 7-day search range (configurable)
-- 🎯 **Quick-fill Buttons**: Pre-populated keywords for common research topics
-- 📥 **CSV Export**: Download results for further analysis
-- 📁 **Batch Processing**: Upload CSV files for multi-section searches
-
-## 📖 Usage
-
-### Single Search
-
-1. **Choose a quick-fill option** or enter custom keywords:
-   - 🏥 Prostate Cancer & Urology (orgovyx, myfembree, OAB, etc.)
-   - 🤖 AI in Pharma (AI, machine learning, RAG, LLM, etc.)
-
-2. **Select date range** (default: last 7 days)
-
-3. **Choose search type**:
-   - **Standard**: Any keyword in article
-   - **Title**: Keyword must be in title
-   - **Co-occurrence**: 2+ keywords must appear together
-
-4. **Click "Research Pharma Sources"** to start the search
-
-### Multi-Section CSV Processing
-
-Upload a CSV file with columns:
-- `aliases` - Alternative names/keywords
-- `keywords` - Main search terms
-- `search_type` - standard/title/co-occurrence
-- `subheader` - Section name
-- `header` - Main header
-- `user` - User identifier
-
-## ⚙️ Configuration
-
-Default settings in `constants.py`:
+Edit `constants.py` with your API keys:
 
 ```python
-# Search Configuration
-DEFAULT_DATE_RANGE_DAYS = 7
-MAX_KEYWORDS = 100
-MAX_RESULTS_PER_SOURCE = 50
-
-# LLM Configuration
-OPENAI_MODEL = "gpt-4o-mini"  # Main model for curation
-DATE_EXTRACTION_MODEL = "gpt-3.5-turbo"  # Fast model for date extraction
-MAX_TOKENS = 3000
-TEMPERATURE = 0.0
+OPENAI_API_KEY = "your-openai-key"
+TAVILY_API_KEY = "your-tavily-key"
+NEWSAPI_KEY = "your-newsapi-key"
+EXA_API_KEY = "your-exa-key"
+PUBMED_EMAIL = "your-email@example.com"
 ```
 
-### Smart Date Extraction
+### 3. Integrate into Your Flask App
 
-Articles without publication dates are processed by a fast LLM (`gpt-3.5-turbo`) that:
-- Analyzes URLs for date patterns (e.g., `/2024/03/15/`)
-- Scans content for publication indicators
-- Checks metadata and article text (up to 3000 characters)
-- Extracts dates and validates them against your search range
+```python
+from flask import Flask
+from ome_blueprint import ome_blueprint
 
-**Benefits:**
-- 📈 Captures more relevant articles (rescued by LLM)
-- 💰 Cost-efficient (uses cheaper model for date extraction)
-- 🎯 Only includes articles with dates within your specified range
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key'
 
-## 🔑 API Keys
+# Register blueprint at /OME/ endpoint
+app.register_blueprint(ome_blueprint, url_prefix='/OME')
 
-The application requires at least one of the following API configurations:
+if __name__ == '__main__':
+    app.run(debug=True)
+```
 
-- **OpenAI** (Required): For AI-powered curation and summarization
-- **PubMed Email** (Recommended): For accessing PubMed medical literature
-- **Tavily** (Optional): For enhanced web search capabilities
-- **Exa** (Optional): For neural search functionality
-- **NewsAPI** (Optional): For pharmaceutical news articles
+### 4. Run Your App
 
-## 🧪 Tech Stack
+```bash
+python your_app.py
+```
 
-- **Backend**: Python 3.7+, Flask
-- **AI/ML**: OpenAI GPT-4o-mini
-- **APIs**: PubMed, Exa, Tavily, NewsAPI
-- **Data Processing**: Pandas-compatible CSV export
+Access the Pharma Research Agent at: `http://localhost:5000/OME/`
 
-## 📝 Notes
+## Blueprint Endpoints
 
-- API keys are stored in `constants.py` (git-ignored for security)
-- The application works with any combination of available APIs
-- Without API keys, basic search functionality will be available
-- Results are temporarily stored in memory for CSV export
-- Default date range uses today as end date and 7 days prior as start date
+- `GET /OME/` - Main search interface
+- `POST /OME/search` - Perform pharmaceutical news search
+- `GET /OME/health` - Health check and API status
+- `GET /OME/download/<session_id>` - Download results as CSV
+- `POST /OME/upload_csv` - Batch processing via CSV upload
 
-## 🔒 Security
+## API Usage Example
 
-- Never commit `constants.py` to version control
-- Use `constants.py.example` as a template
-- Keep your API keys secure and private
+```python
+import requests
 
-## 📄 License
+# Search for pharmaceutical news
+response = requests.post('http://localhost:5000/OME/search', json={
+    'keywords': 'prostate cancer, immunotherapy, clinical trials',
+    'start_date': '2024-01-01',
+    'end_date': '2024-12-31',
+    'search_type': 'standard',
+    'search_engines': ['pubmed', 'exa', 'tavily', 'newsapi']
+})
 
-Private project - All rights reserved
+results = response.json()
+print(f"Found {len(results['results'])} articles")
+```
+
+## Project Structure
+
+```
+.
+├── ome_blueprint.py          # Main Flask blueprint
+├── multi_agent_pharma.py     # Multi-agent AI workflow
+├── pharma_agent.py           # Base pharma agent
+├── config.py                 # Configuration loader
+├── constants.py              # API keys and settings
+├── requirements.txt          # Python dependencies
+├── example_integration.py    # Integration example
+└── README.md                 # This file
+```
+
+## Multi-Agent Workflow
+
+The system uses specialized AI agents for:
+
+1. **Date Extraction Agent** - Extracts publication dates using LLM + regex
+2. **Relevance Agent** - Scores articles for pharmaceutical relevance
+3. **Content Enhancement Agent** - Highlights keywords and generates summaries
+4. **Deduplication Agent** - Removes near-duplicate articles
+
+## Configuration
+
+Edit `constants.py` to customize:
+
+```python
+MAX_KEYWORDS = 100                    # Max keywords per search
+MAX_RESULTS_PER_SOURCE = 50           # Max results from each API
+DEFAULT_DATE_RANGE_DAYS = 7           # Default date range
+OPENAI_MODEL = "gpt-4o-mini"          # Main AI model
+DATE_EXTRACTION_MODEL = "gpt-3.5-turbo"  # Faster model for dates
+```
+
+## Requirements
+
+- Python 3.8+
+- Flask 2.3+
+- OpenAI API key (for AI analysis)
+- Tavily API key (for web search)
+- NewsAPI key (for news articles)
+- Exa API key (for neural search)
+
+## License
+
+MIT License - Use freely in your projects
+
+## Support
+
+For issues or questions, please open an issue on the repository.
+
