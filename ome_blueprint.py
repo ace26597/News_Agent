@@ -1658,6 +1658,21 @@ HTML_TEMPLATE = """
             let html = '<div class="alert alert-success">Found ' + data.results.length + ' results from ' + 
                       (data.results_by_source ? Object.keys(data.results_by_source).filter(k => k !== 'metadata').length : 'multiple') + 
                       ' sources</div>';
+            
+            // Add export buttons
+            html += `
+            <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+                <button onclick="downloadHTML('${data.session_id}')" class="btn btn-success" style="flex: 1; min-width: 200px;">
+                    📥 Download as HTML
+                </button>
+                <button onclick="copyHTML('${data.session_id}')" class="btn btn-primary" style="flex: 1; min-width: 200px;">
+                    📋 Copy HTML for Email
+                </button>
+            </div>
+            <div id="copy-notification" style="display: none; padding: 12px; background: #27ae60; color: white; border-radius: 4px; margin-bottom: 15px; text-align: center;">
+                ✓ HTML copied to clipboard! Ready to paste in email.
+            </div>
+            `;
 
             data.results.forEach(result => {
                 // Enhanced result display with detailed information
@@ -1822,6 +1837,54 @@ HTML_TEMPLATE = """
         document.getElementById('api-tavily').innerHTML = '✅';
         document.getElementById('api-exa').innerHTML = '✅';
         document.getElementById('api-newsapi').innerHTML = '✅';
+        
+        // HTML Export Functions
+        async function downloadHTML(sessionId) {
+            try {
+                addActivity('Generating HTML export...', 'info');
+                
+                // Open download in new window
+                window.open(`${BASE_URL}/export_html/${sessionId}?download=true`, '_blank');
+                
+                addActivity('HTML file downloaded successfully', 'success');
+            } catch (error) {
+                addActivity('HTML download failed: ' + error.message, 'error');
+                alert('Error downloading HTML: ' + error.message);
+            }
+        }
+        
+        async function copyHTML(sessionId) {
+            try {
+                addActivity('Generating HTML for clipboard...', 'info');
+                
+                // Fetch HTML content
+                const response = await fetch(`${BASE_URL}/export_html/${sessionId}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    addActivity('Error: ' + data.error, 'error');
+                    alert('Error: ' + data.error);
+                    return;
+                }
+                
+                // Copy to clipboard
+                await navigator.clipboard.writeText(data.html);
+                
+                // Show notification
+                const notification = document.getElementById('copy-notification');
+                if (notification) {
+                    notification.style.display = 'block';
+                    setTimeout(() => {
+                        notification.style.display = 'none';
+                    }, 3000);
+                }
+                
+                addActivity(`HTML copied to clipboard (${data.result_count} articles)`, 'success');
+            } catch (error) {
+                addActivity('Copy failed: ' + error.message, 'error');
+                alert('Error copying HTML: ' + error.message);
+            }
+        }
     </script>
 </body>
 </html>
@@ -2109,6 +2172,207 @@ def upload_csv():
         return jsonify({
             'success': False,
             'error': f'CSV upload failed: {str(e)}'
+        }), 500
+
+@ome_blueprint.route('/export_html/<session_id>')
+def export_html(session_id):
+    """Generate email-friendly HTML for results"""
+    try:
+        if session_id not in search_results_store:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        search_data = search_results_store[session_id]
+        results = search_data['results']
+        metadata = search_data['metadata']
+        
+        if not results:
+            return jsonify({'error': 'No results to export'}), 400
+        
+        # Generate email-friendly HTML with inline styles
+        html_parts = []
+        
+        # Header
+        html_parts.append('''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pharma News Research Results</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+    
+    <!-- Header -->
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; text-align: center;">
+        <h1 style="margin: 0; font-size: 28px;">🔬 Pharma News Research Results</h1>
+        <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">AI-Powered Pharmaceutical News Analysis</p>
+    </div>
+    
+    <!-- Search Summary -->
+    <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+        <h2 style="margin-top: 0; color: #2c3e50; font-size: 20px;">📊 Search Summary</h2>
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px; font-weight: bold; color: #555;">Keywords:</td>
+                <td style="padding: 8px; color: #333;">''' + ', '.join(metadata.get('keywords', [])) + '''</td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+                <td style="padding: 8px; font-weight: bold; color: #555;">Search Type:</td>
+                <td style="padding: 8px; color: #333;">''' + metadata.get('search_type', 'standard').title() + '''</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px; font-weight: bold; color: #555;">Results Found:</td>
+                <td style="padding: 8px; color: #333;"><strong>''' + str(len(results)) + ''' articles</strong></td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+                <td style="padding: 8px; font-weight: bold; color: #555;">Generated:</td>
+                <td style="padding: 8px; color: #333;">''' + datetime.now().strftime('%B %d, %Y at %I:%M %p') + '''</td>
+            </tr>
+        </table>
+    </div>
+    
+    <!-- Results -->
+    <div style="margin-bottom: 30px;">
+        <h2 style="color: #2c3e50; font-size: 20px; margin-bottom: 20px;">📄 Results (sorted by relevance)</h2>
+''')
+        
+        # Add each result
+        for i, result in enumerate(results, 1):
+            relevance_score = result.get('relevance_score', 0)
+            
+            # Score color
+            if relevance_score >= 80:
+                score_color = '#27ae60'  # Green
+            elif relevance_score >= 60:
+                score_color = '#f39c12'  # Orange
+            else:
+                score_color = '#95a5a6'  # Gray
+            
+            # Format date
+            date_str = 'No date'
+            if result.get('date'):
+                try:
+                    date_obj = datetime.fromisoformat(result['date'].replace('Z', '+00:00'))
+                    date_str = date_obj.strftime('%B %d, %Y')
+                except:
+                    date_str = str(result.get('date', 'No date'))
+            
+            html_parts.append(f'''
+        <!-- Result {i} -->
+        <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid {score_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            
+            <!-- Title and Score -->
+            <div style="margin-bottom: 15px;">
+                <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #2c3e50;">
+                    <a href="{result.get('url', '#')}" style="color: #3498db; text-decoration: none;">{i}. {result.get('title', 'No title')}</a>
+                </h3>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <span style="background: {score_color}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">
+                        Relevance: {relevance_score}/100
+                    </span>
+                    <span style="background: #e74c3c; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px;">
+                        {result.get('article_type', 'unknown').title()}
+                    </span>
+                    <span style="color: #7f8c8d; font-size: 13px;">
+                        📅 {date_str}
+                    </span>
+                    <span style="color: #7f8c8d; font-size: 13px;">
+                        📰 {result.get('source', 'Unknown')}
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Summary -->
+            <div style="margin-bottom: 15px; padding: 15px; background: #f8f9fa; border-radius: 6px; font-size: 14px; line-height: 1.6;">
+                {result.get('summary', result.get('content', 'No summary available')[:300] + '...')}
+            </div>
+            
+            <!-- Why Relevant -->
+            {f"""<div style="margin-bottom: 12px; padding: 12px; background: #d4edda; border-left: 3px solid #28a745; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #155724;">Why it's relevant:</strong><br/>
+                {result.get('relevance_reason', 'No reason provided')}
+            </div>""" if result.get('relevance_reason') else ''}
+            
+            <!-- Keywords -->
+            {f"""<div style="margin-bottom: 12px;">
+                <strong style="font-size: 13px; color: #555;">Keywords found:</strong><br/>
+                <div style="margin-top: 6px;">
+                    {''.join([f'<span style="background: #3498db; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; margin-right: 6px; margin-bottom: 6px; display: inline-block;">{kw}</span>' for kw in result.get('mentioned_keywords', [])])}
+                </div>
+            </div>""" if result.get('mentioned_keywords') else ''}
+            
+            <!-- Clinical Significance -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #fff3cd; border-left: 3px solid #ffc107; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #856404;">Clinical Significance:</strong><br/>
+                {result.get('clinical_significance')}
+            </div>""" if result.get('clinical_significance') and result.get('clinical_significance') != 'None' else ''}
+            
+            <!-- Regulatory Impact -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #d1ecf1; border-left: 3px solid #17a2b8; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #0c5460;">Regulatory Impact:</strong><br/>
+                {result.get('regulatory_impact')}
+            </div>""" if result.get('regulatory_impact') and result.get('regulatory_impact') != 'None' else ''}
+            
+            <!-- Market Impact -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #d4edda; border-left: 3px solid #28a745; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #155724;">Market Impact:</strong><br/>
+                {result.get('market_impact')}
+            </div>""" if result.get('market_impact') and result.get('market_impact') != 'None' else ''}
+            
+            <!-- Link -->
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+                <a href="{result.get('url', '#')}" style="color: #3498db; text-decoration: none; font-size: 13px;">
+                    🔗 View Full Article →
+                </a>
+            </div>
+            
+        </div>
+''')
+        
+        # Footer
+        html_parts.append('''
+    </div>
+    
+    <!-- Footer -->
+    <div style="text-align: center; padding: 20px; color: #7f8c8d; font-size: 12px; border-top: 2px solid #e0e0e0; margin-top: 30px;">
+        <p style="margin: 5px 0;">Generated by <strong>Pharma News Research Agent</strong></p>
+        <p style="margin: 5px 0;">AI-powered pharmaceutical news analysis with multi-source data collection</p>
+        <p style="margin: 5px 0;">Powered by GPT-4, PubMed, Exa, Tavily, and NewsAPI</p>
+    </div>
+    
+</body>
+</html>
+''')
+        
+        html_content = ''.join(html_parts)
+        
+        # Return as downloadable file or JSON
+        download = request.args.get('download', 'false').lower() == 'true'
+        
+        if download:
+            # Return as downloadable HTML file
+            keywords_str = '_'.join(metadata.get('keywords', ['results'])[:3])
+            filename = f"pharma_research_{keywords_str}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+            
+            return send_file(
+                io.BytesIO(html_content.encode('utf-8')),
+                mimetype='text/html',
+                as_attachment=True,
+                download_name=filename
+            )
+        else:
+            # Return HTML content for copying
+            return jsonify({
+                'success': True,
+                'html': html_content,
+                'result_count': len(results)
+            })
+        
+    except Exception as e:
+        print(f"HTML export error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'HTML export failed: {str(e)}'
         }), 500
 
 @ome_blueprint.route('/health')
