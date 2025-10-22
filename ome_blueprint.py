@@ -392,12 +392,13 @@ def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], sele
             
             # Use agentic workflow if available
             if AGENT_AVAILABLE and pharma_agent:
-                workflow_result = pharma_agent.execute_workflow(
+                import asyncio
+                workflow_result = asyncio.run(pharma_agent.execute_workflow(
                     keywords=unique_keywords,
                     start_date=start_date,
                     end_date=end_date,
                     search_type=alert_row['search_type']
-                )
+                ))
                 
                 if workflow_result['success']:
                     # Filter results by relevance score > 65
@@ -497,12 +498,13 @@ def process_multi_section_search(sections: List[Dict[str, Any]], start_date: dat
             
             # Use agentic workflow if available
             if AGENT_AVAILABLE and pharma_agent:
-                workflow_result = pharma_agent.execute_workflow(
+                import asyncio
+                workflow_result = asyncio.run(pharma_agent.execute_workflow(
                     keywords=keywords,
                     start_date=start_date,
                     end_date=end_date,
                     search_type=search_type
-                )
+                ))
                 
                 if workflow_result['success']:
                     # Add section context to results
@@ -2225,13 +2227,14 @@ def search():
                 ))
             else:
                 print("Using basic agentic workflow for enhanced research...")
-                workflow_result = pharma_agent.execute_workflow(
+                import asyncio
+                workflow_result = asyncio.run(pharma_agent.execute_workflow(
                     keywords=keywords,
                     start_date=start_date,
                     end_date=end_date,
                     search_type=search_type,
                     search_engines=search_engines
-                )
+                ))
             
             if workflow_result['success']:
                 processed_results = workflow_result['results']
