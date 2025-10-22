@@ -2137,23 +2137,94 @@ HTML_TEMPLATE = """
                     return;
                 }
                 
-                // Copy to clipboard
-                await navigator.clipboard.writeText(data.html);
+                // Try multiple copy methods for better compatibility
+                const htmlContent = data.html;
                 
-                // Show notification
-                const notification = document.getElementById('copy-notification');
-                if (notification) {
-                    notification.style.display = 'block';
-                    setTimeout(() => {
-                        notification.style.display = 'none';
-                    }, 3000);
+                // Method 1: Modern Clipboard API
+                if (navigator.clipboard && window.isSecureContext) {
+                    try {
+                        await navigator.clipboard.writeText(htmlContent);
+                        addActivity(`HTML copied to clipboard (${data.result_count} articles)`, 'success');
+                        showCopyNotification();
+                        return;
+                    } catch (clipboardError) {
+                        console.warn('Clipboard API failed:', clipboardError);
+                    }
                 }
                 
-                addActivity(`HTML copied to clipboard (${data.result_count} articles)`, 'success');
+                // Method 2: Fallback with textarea
+                try {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = htmlContent;
+                    textarea.style.position = 'fixed';
+                    textarea.style.left = '-999999px';
+                    textarea.style.top = '-999999px';
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+                    
+                    const successful = document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    
+                    if (successful) {
+                        addActivity(`HTML copied to clipboard (${data.result_count} articles)`, 'success');
+                        showCopyNotification();
+                    } else {
+                        throw new Error('execCommand copy failed');
+                    }
+                } catch (fallbackError) {
+                    console.warn('Fallback copy failed:', fallbackError);
+                    
+                    // Method 3: Show HTML in modal for manual copy
+                    showHTMLModal(htmlContent, data.result_count);
+                }
+                
             } catch (error) {
-                addActivity('Copy failed: ' + error.message, 'error');
+                console.error('Copy HTML error:', error);
+                addActivity('HTML copy failed: ' + error.message, 'error');
                 alert('Error copying HTML: ' + error.message);
             }
+        }
+        
+        function showCopyNotification() {
+            const notification = document.getElementById('copy-notification');
+            if (notification) {
+                notification.style.display = 'block';
+                setTimeout(() => {
+                    notification.style.display = 'none';
+                }, 3000);
+            }
+        }
+        
+        function showHTMLModal(htmlContent, resultCount) {
+            // Create modal for manual copy
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                background: rgba(0,0,0,0.8); z-index: 10000; display: flex; 
+                align-items: center; justify-content: center; padding: 20px;
+            `;
+            
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 8px; padding: 20px; max-width: 90%; max-height: 90%; overflow: auto;">
+                    <h3 style="margin-top: 0;">📋 Copy HTML Manually</h3>
+                    <p>Your browser doesn't support automatic copying. Please copy the HTML below manually:</p>
+                    <textarea readonly style="width: 100%; height: 400px; font-family: monospace; font-size: 12px; border: 1px solid #ccc; padding: 10px;">${htmlContent}</textarea>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button onclick="this.closest('.modal').remove()" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">Close</button>
+                    </div>
+                </div>
+            `;
+            
+            modal.className = 'modal';
+            document.body.appendChild(modal);
+            
+            // Auto-select the textarea content
+            const textarea = modal.querySelector('textarea');
+            textarea.focus();
+            textarea.select();
+            
+            addActivity(`HTML ready for manual copy (${resultCount} articles)`, 'info');
         }
     </script>
 </body>
@@ -2544,6 +2615,40 @@ def export_html(session_id):
         # Generate email-friendly HTML with inline styles
         html_parts = []
         
+        # Create table of contents
+        toc_items = []
+        for i, result in enumerate(results, 1):
+            title = result.get('title', f'Article {i}')
+            relevance_score = result.get('relevance_score', 0)
+            source = result.get('source', 'Unknown')
+            date_str = 'No date'
+            if result.get('date'):
+                try:
+                    date_obj = datetime.fromisoformat(result['date'].replace('Z', '+00:00'))
+                    date_str = date_obj.strftime('%b %d, %Y')
+                except:
+                    date_str = str(result.get('date', 'No date'))
+            
+            toc_items.append(f'''
+            <tr style="border-bottom: 1px solid #e0e0e0;">
+                <td style="padding: 12px 8px; font-size: 14px;">
+                    <a href="#article-{i}" style="color: #3498db; text-decoration: none; font-weight: 500;">
+                        {i}. {title[:80]}{'...' if len(title) > 80 else ''}
+                    </a>
+                </td>
+                <td style="padding: 12px 8px; text-align: center; font-size: 13px;">
+                    <span style="background: {'#27ae60' if relevance_score >= 80 else '#f39c12' if relevance_score >= 60 else '#95a5a6'}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
+                        {relevance_score}/100
+                    </span>
+                </td>
+                <td style="padding: 12px 8px; text-align: center; font-size: 12px; color: #7f8c8d;">
+                    {source}
+                </td>
+                <td style="padding: 12px 8px; text-align: center; font-size: 12px; color: #7f8c8d;">
+                    {date_str}
+                </td>
+            </tr>''')
+        
         # Header
         html_parts.append('''
 <!DOCTYPE html>
@@ -2552,8 +2657,12 @@ def export_html(session_id):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pharma News Research Results</title>
+    <style>
+        .toc-link { scroll-behavior: smooth; }
+        .article-section { scroll-margin-top: 20px; }
+    </style>
 </head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
     
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; text-align: center;">
@@ -2584,9 +2693,27 @@ def export_html(session_id):
         </table>
     </div>
     
+    <!-- Table of Contents -->
+    <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; border-left: 4px solid #e74c3c;">
+        <h2 style="margin-top: 0; color: #2c3e50; font-size: 20px;">📋 Table of Contents</h2>
+        <p style="color: #7f8c8d; font-size: 14px; margin-bottom: 15px;">Click on any title to jump directly to that article</p>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #e0e0e0;">
+            <thead>
+                <tr style="background: #f8f9fa;">
+                    <th style="padding: 12px 8px; text-align: left; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0;">Article Title</th>
+                    <th style="padding: 12px 8px; text-align: center; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0; width: 80px;">Score</th>
+                    <th style="padding: 12px 8px; text-align: center; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0; width: 100px;">Source</th>
+                    <th style="padding: 12px 8px; text-align: center; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0; width: 100px;">Date</th>
+                </tr>
+            </thead>
+            <tbody>''' + ''.join(toc_items) + '''
+            </tbody>
+        </table>
+    </div>
+    
     <!-- Results -->
     <div style="margin-bottom: 30px;">
-        <h2 style="color: #2c3e50; font-size: 20px; margin-bottom: 20px;">📄 Results (sorted by relevance)</h2>
+        <h2 style="color: #2c3e50; font-size: 20px; margin-bottom: 20px;">📄 Detailed Results (sorted by relevance)</h2>
 ''')
         
         # Add each result
@@ -2612,7 +2739,7 @@ def export_html(session_id):
             
             html_parts.append(f'''
         <!-- Result {i} -->
-        <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid {score_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div id="article-{i}" class="article-section" style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid {score_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
             
             <!-- Title and Score -->
             <div style="margin-bottom: 15px;">
