@@ -2066,16 +2066,29 @@ HTML_TEMPLATE = """
             
             let html = `
                 <div class="alert alert-success">
-                    <h3>Alert Processing Complete</h3>
+                    <h3>🔬 Alert Processing Complete</h3>
                     <p><strong>User:</strong> ${data.user}</p>
                     <p><strong>Total Alerts:</strong> ${data.total_alerts}</p>
                     <p><strong>Successful Alerts:</strong> ${data.successful_alerts}</p>
                     <p><strong>Total Results:</strong> ${data.total_results} (relevance score > 65)</p>
                 </div>
+                
+                <!-- HTML Export Buttons -->
+                <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button onclick="downloadBatchHTML('${data.user}')" class="btn btn-success" style="flex: 1; min-width: 200px;">
+                        📥 Download Batch HTML
+                    </button>
+                    <button onclick="copyBatchHTML('${data.user}')" class="btn btn-primary" style="flex: 1; min-width: 200px;">
+                        📋 Copy Batch HTML for Email
+                    </button>
+                </div>
+                <div id="batch-copy-notification" style="display: none; padding: 12px; background: #27ae60; color: white; border-radius: 4px; margin-bottom: 15px; text-align: center;">
+                    ✓ Batch HTML copied to clipboard! Ready to paste in email.
+                </div>
             `;
             
             if (data.processed_alerts && data.processed_alerts.length > 0) {
-                html += '<div class="alert alert-info"><h4>Processed Alerts:</h4><ul>';
+                html += '<div class="alert alert-info"><h4>📋 Processed Alerts Summary:</h4><ul>';
                 data.processed_alerts.forEach(alert => {
                     html += `<li><strong>${alert.alert_title}</strong> - ${alert.subheader}: ${alert.results_count} results</li>`;
                 });
@@ -2083,19 +2096,119 @@ HTML_TEMPLATE = """
             }
             
             if (data.results && data.results.length > 0) {
-                html += '<div class="alert alert-info"><h4>Results:</h4>';
-                data.results.forEach((result, index) => {
+                html += '<div class="alert alert-info"><h4>📄 Detailed Results (sorted by relevance):</h4>';
+                
+                // Group results by alert for better organization
+                const resultsByAlert = {};
+                data.results.forEach(result => {
                     const alertContext = result.alert_context || {};
-                    html += `
-                        <div class="result-card" style="margin-bottom: 15px; padding: 15px; border: 1px solid #ddd; border-radius: 4px;">
-                            <h5><a href="${result.url}" target="_blank">${index + 1}. ${result.title}</a></h5>
-                            <p><strong>Relevance Score:</strong> ${result.relevance_score || 'N/A'}</p>
-                            <p><strong>Alert:</strong> ${alertContext.alert_title || 'N/A'}</p>
-                            <p><strong>Source:</strong> ${result.source || 'N/A'}</p>
-                            <p>${result.summary || result.content?.substring(0, 200) || 'No summary available'}...</p>
-                        </div>
-                    `;
+                    const alertKey = `${alertContext.alert_title || 'Unknown'}_${alertContext.subheader || 'Unknown'}`;
+                    if (!resultsByAlert[alertKey]) {
+                        resultsByAlert[alertKey] = {
+                            alert_title: alertContext.alert_title || 'Unknown Alert',
+                            subheader: alertContext.subheader || 'Unknown',
+                            results: []
+                        };
+                    }
+                    resultsByAlert[alertKey].results.push(result);
                 });
+                
+                // Display each alert section with detailed results
+                Object.values(resultsByAlert).forEach((alertGroup, groupIndex) => {
+                    html += `
+                        <div class="alert-section" style="margin-bottom: 30px; border: 2px solid #e0e0e0; border-radius: 8px; padding: 20px;">
+                            <h5 style="color: #2c3e50; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #e0e0e0;">
+                                📌 ${alertGroup.alert_title} - ${alertGroup.subheader}
+                                <span style="float: right; background: #3498db; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px;">
+                                    ${alertGroup.results.length} results
+                                </span>
+                            </h5>
+                    `;
+                    
+                    alertGroup.results.forEach((result, index) => {
+                        // Enhanced result display with detailed information (same as single search)
+                        const relevanceScore = result.relevance_score || 0;
+                        const relevanceReason = result.relevance_reason || 'No reason provided';
+                        const articleType = result.article_type || 'unknown';
+                        const summary = result.summary || result.content?.substring(0, 300) || 'No summary available';
+                        const highlightedContent = result.highlighted_content || summary;
+                        const mentionedKeywords = result.mentioned_keywords || [];
+                        const clinicalSignificance = result.clinical_significance;
+                        const regulatoryImpact = result.regulatory_impact;
+                        const marketImpact = result.market_impact;
+                        
+                        // Format date properly
+                        let dateDisplay = 'No date';
+                        if (result.date) {
+                            try {
+                                const date = new Date(result.date);
+                                dateDisplay = date.toLocaleDateString();
+                            } catch (e) {
+                                dateDisplay = result.date;
+                            }
+                        }
+                        
+                        // Create keyword tags
+                        const keywordTags = mentionedKeywords.map(kw => 
+                            `<span class="keyword-tag">${kw}</span>`
+                        ).join('');
+                        
+                        html += `
+                            <div class="result-card enhanced-result" data-relevance-score="${relevanceScore}" style="margin-bottom: 20px;">
+                                <div class="result-header">
+                                    <div class="result-title">
+                                        <a href="${result.url}" target="_blank">${index + 1}. ${result.title}</a>
+                                    </div>
+                                    <div class="result-scores">
+                                        <span class="badge badge-score">Relevance: ${relevanceScore}</span>
+                                        <span class="badge badge-type">${articleType}</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="result-summary">
+                                    ${highlightedContent}
+                                </div>
+                                
+                                <div class="result-relevance">
+                                    <strong>Why it's relevant:</strong> ${relevanceReason}
+                                </div>
+                                
+                                ${mentionedKeywords.length > 0 ? `
+                                <div class="result-keywords">
+                                    <strong>Keywords found:</strong> ${keywordTags}
+                                </div>
+                                ` : ''}
+                                
+                                ${clinicalSignificance ? `
+                                <div class="result-significance">
+                                    <strong>Clinical Significance:</strong> ${clinicalSignificance}
+                                </div>
+                                ` : ''}
+                                
+                                ${regulatoryImpact ? `
+                                <div class="result-regulatory">
+                                    <strong>Regulatory Impact:</strong> ${regulatoryImpact}
+                                </div>
+                                ` : ''}
+                                
+                                ${marketImpact ? `
+                                <div class="result-market">
+                                    <strong>Market Impact:</strong> ${marketImpact}
+                                </div>
+                                ` : ''}
+                                
+                                <div class="result-meta">
+                                    <span><span class="badge badge-source">${result.source || 'Unknown'}</span></span>
+                                    <span>📅 ${dateDisplay}</span>
+                                    ${result.authors ? '<span>👤 ' + result.authors.substring(0, 50) + '</span>' : ''}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    html += '</div>';
+                });
+                
                 html += '</div>';
             }
             
@@ -2225,6 +2338,125 @@ HTML_TEMPLATE = """
             textarea.select();
             
             addActivity(`HTML ready for manual copy (${resultCount} articles)`, 'info');
+        }
+        
+        // Batch HTML functions
+        async function downloadBatchHTML(user) {
+            try {
+                addActivity('Generating batch HTML export...', 'info');
+                
+                // Open download in new window
+                window.open(`${BASE_URL}/export_batch_html/${user}?download=true`, '_blank');
+                
+                addActivity('Batch HTML file downloaded successfully', 'success');
+            } catch (error) {
+                addActivity('Batch HTML download failed: ' + error.message, 'error');
+                alert('Error downloading batch HTML: ' + error.message);
+            }
+        }
+        
+        async function copyBatchHTML(user) {
+            try {
+                addActivity('Generating batch HTML for clipboard...', 'info');
+                
+                // Fetch HTML content
+                const response = await fetch(`${BASE_URL}/export_batch_html/${user}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    addActivity('Error: ' + data.error, 'error');
+                    alert('Error: ' + data.error);
+                    return;
+                }
+                
+                // Try multiple copy methods for better compatibility
+                const htmlContent = data.html;
+                
+                // Method 1: Modern Clipboard API
+                if (navigator.clipboard && window.isSecureContext) {
+                    try {
+                        await navigator.clipboard.writeText(htmlContent);
+                        addActivity(`Batch HTML copied to clipboard (${data.result_count} articles)`, 'success');
+                        showBatchCopyNotification();
+                        return;
+                    } catch (clipboardError) {
+                        console.warn('Clipboard API failed:', clipboardError);
+                    }
+                }
+                
+                // Method 2: Fallback with textarea
+                try {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = htmlContent;
+                    textarea.style.position = 'fixed';
+                    textarea.style.left = '-999999px';
+                    textarea.style.top = '-999999px';
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+                    
+                    const successful = document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    
+                    if (successful) {
+                        addActivity(`Batch HTML copied to clipboard (${data.result_count} articles)`, 'success');
+                        showBatchCopyNotification();
+                    } else {
+                        throw new Error('execCommand copy failed');
+                    }
+                } catch (fallbackError) {
+                    console.warn('Fallback copy failed:', fallbackError);
+                    
+                    // Method 3: Show HTML in modal for manual copy
+                    showBatchHTMLModal(htmlContent, data.result_count);
+                }
+                
+            } catch (error) {
+                console.error('Copy batch HTML error:', error);
+                addActivity('Batch HTML copy failed: ' + error.message, 'error');
+                alert('Error copying batch HTML: ' + error.message);
+            }
+        }
+        
+        function showBatchCopyNotification() {
+            const notification = document.getElementById('batch-copy-notification');
+            if (notification) {
+                notification.style.display = 'block';
+                setTimeout(() => {
+                    notification.style.display = 'none';
+                }, 3000);
+            }
+        }
+        
+        function showBatchHTMLModal(htmlContent, resultCount) {
+            // Create modal for manual copy
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+                background: rgba(0,0,0,0.8); z-index: 10000; display: flex; 
+                align-items: center; justify-content: center; padding: 20px;
+            `;
+            
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 8px; padding: 20px; max-width: 90%; max-height: 90%; overflow: auto;">
+                    <h3 style="margin-top: 0;">📋 Copy Batch HTML Manually</h3>
+                    <p>Your browser doesn't support automatic copying. Please copy the HTML below manually:</p>
+                    <textarea readonly style="width: 100%; height: 400px; font-family: monospace; font-size: 12px; border: 1px solid #ccc; padding: 10px;">${htmlContent}</textarea>
+                    <div style="margin-top: 15px; text-align: right;">
+                        <button onclick="this.closest('.modal').remove()" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">Close</button>
+                    </div>
+                </div>
+            `;
+            
+            modal.className = 'modal';
+            document.body.appendChild(modal);
+            
+            // Auto-select the textarea content
+            const textarea = modal.querySelector('textarea');
+            textarea.focus();
+            textarea.select();
+            
+            addActivity(`Batch HTML ready for manual copy (${resultCount} articles)`, 'info');
         }
     </script>
 </body>
@@ -2853,6 +3085,280 @@ def export_html(session_id):
         return jsonify({
             'success': False,
             'error': f'HTML export failed: {str(e)}'
+        }), 500
+
+@ome_blueprint.route('/export_batch_html/<user>')
+def export_batch_html(user):
+    """Generate email-friendly HTML for batch processing results"""
+    try:
+        # Find the latest batch processing results for this user from search_results_store
+        user_sessions = []
+        for session_id, data in search_results_store.items():
+            if (session_id.startswith('user_alerts_') and 
+                data.get('metadata', {}).get('user') == user):
+                user_sessions.append((session_id, data))
+        
+        if not user_sessions:
+            return jsonify({'error': 'No batch results found for this user'}), 404
+        
+        # Get the most recent session
+        latest_session_id, batch_data = max(user_sessions, key=lambda x: x[1].get('timestamp', datetime.min))
+        results = batch_data['results']
+        metadata = batch_data['metadata']
+        
+        if not results:
+            return jsonify({'error': 'No results to export'}), 400
+        
+        # Generate email-friendly HTML with inline styles (same format as single search)
+        html_parts = []
+        
+        # Create table of contents
+        toc_items = []
+        for i, result in enumerate(results, 1):
+            title = result.get('title', f'Article {i}')
+            relevance_score = result.get('relevance_score', 0)
+            source = result.get('source', 'Unknown')
+            date_str = 'No date'
+            if result.get('date'):
+                try:
+                    date_obj = datetime.fromisoformat(result['date'].replace('Z', '+00:00'))
+                    date_str = date_obj.strftime('%b %d, %Y')
+                except:
+                    date_str = str(result.get('date', 'No date'))
+            
+            toc_items.append(f'''
+            <tr style="border-bottom: 1px solid #e0e0e0;">
+                <td style="padding: 12px 8px; font-size: 14px;">
+                    <a href="#article-{i}" style="color: #3498db; text-decoration: none; font-weight: 500;">
+                        {i}. {title[:80]}{'...' if len(title) > 80 else ''}
+                    </a>
+                </td>
+                <td style="padding: 12px 8px; text-align: center; font-size: 13px;">
+                    <span style="background: {'#27ae60' if relevance_score >= 80 else '#f39c12' if relevance_score >= 60 else '#95a5a6'}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
+                        {relevance_score}/100
+                    </span>
+                </td>
+                <td style="padding: 12px 8px; text-align: center; font-size: 12px; color: #7f8c8d;">
+                    {source}
+                </td>
+                <td style="padding: 12px 8px; text-align: center; font-size: 12px; color: #7f8c8d;">
+                    {date_str}
+                </td>
+            </tr>''')
+        
+        # Header
+        html_parts.append('''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Batch Pharma News Research Results</title>
+    <style>
+        .toc-link { scroll-behavior: smooth; }
+        .article-section { scroll-margin-top: 20px; }
+    </style>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; background-color: #f5f5f5;">
+    
+    <!-- Header -->
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; text-align: center;">
+        <h1 style="margin: 0; font-size: 28px;">🔬 Batch Pharma News Research Results</h1>
+        <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">AI-Powered Pharmaceutical News Analysis - Batch Processing</p>
+    </div>
+    
+    <!-- Search Summary -->
+    <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+        <h2 style="margin-top: 0; color: #2c3e50; font-size: 20px;">📊 Batch Processing Summary</h2>
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px; font-weight: bold; color: #555;">User:</td>
+                <td style="padding: 8px; color: #333;">''' + metadata.get('user', 'Unknown') + '''</td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+                <td style="padding: 8px; font-weight: bold; color: #555;">Total Alerts:</td>
+                <td style="padding: 8px; color: #333;">''' + str(metadata.get('total_alerts', 0)) + '''</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px; font-weight: bold; color: #555;">Successful Alerts:</td>
+                <td style="padding: 8px; color: #333;">''' + str(metadata.get('successful_alerts', 0)) + '''</td>
+            </tr>
+            <tr style="background: #f8f9fa;">
+                <td style="padding: 8px; font-weight: bold; color: #555;">Results Found:</td>
+                <td style="padding: 8px; color: #333;"><strong>''' + str(len(results)) + ''' articles</strong></td>
+            </tr>
+            <tr>
+                <td style="padding: 8px; font-weight: bold; color: #555;">Generated:</td>
+                <td style="padding: 8px; color: #333;">''' + datetime.now().strftime('%B %d, %Y at %I:%M %p') + '''</td>
+            </tr>
+        </table>
+    </div>
+    
+    <!-- Table of Contents -->
+    <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; border-left: 4px solid #e74c3c;">
+        <h2 style="margin-top: 0; color: #2c3e50; font-size: 20px;">📋 Table of Contents</h2>
+        <p style="color: #7f8c8d; font-size: 14px; margin-bottom: 15px;">Click on any title to jump directly to that article</p>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #e0e0e0;">
+            <thead>
+                <tr style="background: #f8f9fa;">
+                    <th style="padding: 12px 8px; text-align: left; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0;">Article Title</th>
+                    <th style="padding: 12px 8px; text-align: center; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0; width: 80px;">Score</th>
+                    <th style="padding: 12px 8px; text-align: center; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0; width: 100px;">Source</th>
+                    <th style="padding: 12px 8px; text-align: center; font-weight: bold; color: #2c3e50; border-bottom: 2px solid #e0e0e0; width: 100px;">Date</th>
+                </tr>
+            </thead>
+            <tbody>''' + ''.join(toc_items) + '''
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Results -->
+    <div style="margin-bottom: 30px;">
+        <h2 style="color: #2c3e50; font-size: 20px; margin-bottom: 20px;">📄 Detailed Results (sorted by relevance)</h2>
+''')
+        
+        # Add each result (same format as single search)
+        for i, result in enumerate(results, 1):
+            relevance_score = result.get('relevance_score', 0)
+            
+            # Score color
+            if relevance_score >= 80:
+                score_color = '#27ae60'  # Green
+            elif relevance_score >= 60:
+                score_color = '#f39c12'  # Orange
+            else:
+                score_color = '#95a5a6'  # Gray
+            
+            # Format date
+            date_str = 'No date'
+            if result.get('date'):
+                try:
+                    date_obj = datetime.fromisoformat(result['date'].replace('Z', '+00:00'))
+                    date_str = date_obj.strftime('%B %d, %Y')
+                except:
+                    date_str = str(result.get('date', 'No date'))
+            
+            html_parts.append(f'''
+        <!-- Result {i} -->
+        <div id="article-{i}" class="article-section" style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid {score_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            
+            <!-- Title and Score -->
+            <div style="margin-bottom: 15px;">
+                <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #2c3e50;">
+                    <a href="{result.get('url', '#')}" style="color: #3498db; text-decoration: none;">{i}. {result.get('title', 'No title')}</a>
+                </h3>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <span style="background: {score_color}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">
+                        Relevance: {relevance_score}/100
+                    </span>
+                    <span style="background: #e74c3c; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px;">
+                        {result.get('article_type', 'unknown').title()}
+                    </span>
+                    <span style="color: #7f8c8d; font-size: 13px;">
+                        📅 {date_str}
+                    </span>
+                    <span style="color: #7f8c8d; font-size: 13px;">
+                        📰 {result.get('source', 'Unknown')}
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Summary -->
+            <div style="margin-bottom: 15px; padding: 15px; background: #f8f9fa; border-radius: 6px; font-size: 14px; line-height: 1.6;">
+                {result.get('summary', result.get('content', 'No summary available')[:300] + '...')}
+            </div>
+            
+            <!-- Why Relevant -->
+            {f"""<div style="margin-bottom: 12px; padding: 12px; background: #d4edda; border-left: 3px solid #28a745; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #155724;">Why it's relevant:</strong><br/>
+                {result.get('relevance_reason', 'No reason provided')}
+            </div>""" if result.get('relevance_reason') else ''}
+            
+            <!-- Keywords -->
+            {f"""<div style="margin-bottom: 12px;">
+                <strong style="font-size: 13px; color: #555;">Keywords found:</strong><br/>
+                <div style="margin-top: 6px;">
+                    {''.join([f'<span style="background: #3498db; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; margin-right: 6px; margin-bottom: 6px; display: inline-block;">{kw}</span>' for kw in result.get('mentioned_keywords', [])])}
+                </div>
+            </div>""" if result.get('mentioned_keywords') else ''}
+            
+            <!-- Clinical Significance -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #fff3cd; border-left: 3px solid #ffc107; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #856404;">Clinical Significance:</strong><br/>
+                {result.get('clinical_significance')}
+            </div>""" if result.get('clinical_significance') and result.get('clinical_significance') != 'None' else ''}
+            
+            <!-- Regulatory Impact -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #d1ecf1; border-left: 3px solid #17a2b8; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #0c5460;">Regulatory Impact:</strong><br/>
+                {result.get('regulatory_impact')}
+            </div>""" if result.get('regulatory_impact') and result.get('regulatory_impact') != 'None' else ''}
+            
+            <!-- Market Impact -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #d4edda; border-left: 3px solid #28a745; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #155724;">Market Impact:</strong><br/>
+                {result.get('market_impact')}
+            </div>""" if result.get('market_impact') and result.get('market_impact') != 'None' else ''}
+            
+            <!-- Alert Context -->
+            {f"""<div style="margin-bottom: 12px; padding: 10px; background: #e2e3e5; border-left: 3px solid #6c757d; border-radius: 4px; font-size: 13px;">
+                <strong style="color: #495057;">Alert Context:</strong><br/>
+                {result.get('alert_context', {}).get('alert_title', 'Unknown')} - {result.get('alert_context', {}).get('subheader', 'Unknown')}
+            </div>""" if result.get('alert_context') else ''}
+            
+            <!-- Link -->
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+                <a href="{result.get('url', '#')}" style="color: #3498db; text-decoration: none; font-size: 13px;">
+                    🔗 View Full Article →
+                </a>
+            </div>
+            
+        </div>
+''')
+        
+        # Footer
+        html_parts.append('''
+    </div>
+    
+    <!-- Footer -->
+    <div style="text-align: center; padding: 20px; color: #7f8c8d; font-size: 12px; border-top: 2px solid #e0e0e0; margin-top: 30px;">
+        <p style="margin: 5px 0;">Generated by <strong>Pharma News Research Agent</strong></p>
+        <p style="margin: 5px 0;">AI-powered pharmaceutical news analysis with multi-source data collection</p>
+        <p style="margin: 5px 0;">Powered by GPT-4, PubMed, Exa, Tavily, and NewsAPI</p>
+    </div>
+    
+</body>
+</html>
+''')
+        
+        html_content = ''.join(html_parts)
+        
+        # Return as downloadable file or JSON
+        download = request.args.get('download', 'false').lower() == 'true'
+        
+        if download:
+            # Return as downloadable HTML file
+            filename = f"batch_pharma_research_{user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+            
+            return send_file(
+                io.BytesIO(html_content.encode('utf-8')),
+                mimetype='text/html',
+                as_attachment=True,
+                download_name=filename
+            )
+        else:
+            # Return HTML content for copying
+            return jsonify({
+                'success': True,
+                'html': html_content,
+                'result_count': len(results)
+            })
+        
+    except Exception as e:
+        print(f"Batch HTML export error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Batch HTML export failed: {str(e)}'
         }), 500
 
 @ome_blueprint.route('/health')
