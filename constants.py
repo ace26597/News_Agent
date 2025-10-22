@@ -9,7 +9,6 @@ AZURE_OPENAI_API_KEY = "your-azure-openai-api-key-here"
 AZURE_OPENAI_ENDPOINT = "https://your-resource-name.openai.azure.com/"
 AZURE_OPENAI_API_VERSION = "2024-02-15-preview"
 AZURE_OPENAI_DEPLOYMENT_NAME = "gpt-4o-mini"  # Your deployment name
-
 # Tavily API Key for enhanced web search
 TAVILY_API_KEY = "your-tavily-api-key-here"
 
