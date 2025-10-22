@@ -392,7 +392,7 @@ def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], sele
             
             # Use agentic workflow if available
             if AGENT_AVAILABLE and pharma_agent:
-                workflow_result = pharma_agent.execute_research_workflow(
+                workflow_result = pharma_agent.execute_workflow(
                     keywords=unique_keywords,
                     start_date=start_date,
                     end_date=end_date,
@@ -497,7 +497,7 @@ def process_multi_section_search(sections: List[Dict[str, Any]], start_date: dat
             
             # Use agentic workflow if available
             if AGENT_AVAILABLE and pharma_agent:
-                workflow_result = pharma_agent.execute_research_workflow(
+                workflow_result = pharma_agent.execute_workflow(
                     keywords=keywords,
                     start_date=start_date,
                     end_date=end_date,
@@ -2225,7 +2225,7 @@ def search():
                 ))
             else:
                 print("Using basic agentic workflow for enhanced research...")
-                workflow_result = pharma_agent.execute_research_workflow(
+                workflow_result = pharma_agent.execute_workflow(
                     keywords=keywords,
                     start_date=start_date,
                     end_date=end_date,
