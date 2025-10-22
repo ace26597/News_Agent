@@ -237,10 +237,10 @@ class RelevanceAgent:
         self.config = config
         self.openai_client = create_openai_client(config)
         
-    def analyze_relevance(self, article: ArticleData, keywords: List[str], search_type: str) -> Dict[str, Any]:
-        """Analyze article relevance and provide detailed scoring"""
+    def analyze_relevance(self, article: ArticleData, keywords: List[str], search_type: str, alert_title: str = None, alert_header: str = None) -> Dict[str, Any]:
+        """Analyze article relevance and provide detailed scoring based purely on LLM analysis"""
         try:
-            # Create rich context for the agent
+            # Create rich context for the agent with alert information
             article_context = f"""
 ARTICLE DETAILS:
 Title: {article.title}
@@ -253,43 +253,52 @@ SEARCH CONTEXT:
 Keywords: {', '.join(keywords)}
 Search Type: {search_type}
 Domain: Pharmaceutical/Medical Research
+{f'Alert Title: {alert_title}' if alert_title else ''}
+{f'Alert Header: {alert_header}' if alert_header else ''}
 """
             
-            system_prompt = """You are an expert pharmaceutical research analyst. Your job is to evaluate medical and pharmaceutical articles for relevance, quality, and significance.
+            system_prompt = """You are an expert pharmaceutical research analyst. Your job is to evaluate medical and pharmaceutical articles for relevance, quality, and significance based SOLELY on the content and context provided.
 
 You MUST respond with ONLY valid JSON. No markdown, no code blocks, no extra text - just raw JSON."""
 
             user_prompt = f"""{article_context}
 
-TASK: Analyze this article and provide a comprehensive relevance assessment.
+TASK: Analyze this article and provide a comprehensive relevance assessment based PURELY on LLM analysis.
 
 OUTPUT FORMAT (raw JSON only, no markdown):
 {{
     "relevance_score": <number 0-100>,
-    "relevance_reason": "<detailed explanation>",
+    "relevance_reason": "<detailed explanation of why this score was assigned>",
     "article_type": "<research|news|press_release|company_page|clinical_trial|regulatory|other>",
-    "mentioned_keywords": ["<keyword1>", "<keyword2>", ...],
+    "mentioned_keywords": ["<exact keywords found in content>"],
     "clinical_significance": "<clinical relevance explanation or 'None'>",
     "regulatory_impact": "<regulatory implications or 'None'>",
     "market_impact": "<market implications or 'None'>",
     "summary": "<2-3 sentence summary>"
 }}
 
-SCORING GUIDELINES:
-- 90-100: Perfect match, highly relevant research/clinical data, directly addresses keywords
-- 80-89: Very relevant, important news or study results, strong keyword presence
-- 70-79: Relevant, useful information, moderate keyword presence
-- 60-69: Somewhat relevant, minor connection to keywords
-- 50-59: Barely relevant, weak connection
-- 0-49: Not relevant, no meaningful connection
+SCORING GUIDELINES (Base your score ONLY on content analysis):
+- 90-100: Perfect match, highly relevant research/clinical data, directly addresses keywords and alert context
+- 80-89: Very relevant, important news or study results, strong keyword presence and alert relevance
+- 70-79: Relevant, useful information, moderate keyword presence and some alert relevance
+- 60-69: Somewhat relevant, minor connection to keywords or alert context
+- 50-59: Barely relevant, weak connection to keywords or alert context
+- 0-49: Not relevant, no meaningful connection to keywords or alert context
 
-EVALUATION CRITERIA:
-1. Keyword Presence: How many search keywords appear in title and content?
-2. Content Quality: Is this credible research, news, or promotional material?
-3. Clinical Significance: Does it discuss clinical trials, efficacy, safety, or patient outcomes?
-4. Regulatory Relevance: Are there FDA approvals, regulatory decisions, or guidelines?
-5. Market Impact: Business implications, commercial developments, or market dynamics?
-6. Source Credibility: Is it from a reputable source (PubMed, peer-reviewed, official news)?
+EVALUATION CRITERIA (Analyze each aspect):
+1. Keyword Presence: How many search keywords appear in title and content? (Exact matches only)
+2. Alert Relevance: How well does this article relate to the alert title/header context?
+3. Content Quality: Is this credible research, news, or promotional material?
+4. Clinical Significance: Does it discuss clinical trials, efficacy, safety, or patient outcomes?
+5. Regulatory Relevance: Are there FDA approvals, regulatory decisions, or guidelines?
+6. Market Impact: Business implications, commercial developments, or market dynamics?
+7. Source Credibility: Is it from a reputable source (PubMed, peer-reviewed, official news)?
+
+IMPORTANT: 
+- Score based ONLY on the actual content and context provided
+- Consider the alert title/header when provided for additional context
+- Look for EXACT keyword matches, not partial matches
+- Provide detailed reasoning for your score
 
 Return ONLY the JSON object, nothing else."""
             
@@ -365,22 +374,25 @@ class ContentEnhancementAgent:
         self.config = config
     
     def enhance_content(self, article: ArticleData, keywords: List[str]) -> str:
-        """Create highlighted version of content with keyword emphasis"""
+        """Create highlighted version of content with keyword emphasis - matches complete words only"""
         content = article.content
         mentioned_keywords = article.mentioned_keywords or []
         
         # Combine search keywords with mentioned keywords
         all_keywords = list(set(keywords + mentioned_keywords))
         
-        # Create highlighted content
+        # Create highlighted content with word boundary matching
         highlighted_content = content
         for keyword in all_keywords:
-            if keyword.lower() in highlighted_content.lower():
-                # Use case-insensitive replacement while preserving original case
-                pattern = re.compile(re.escape(keyword), re.IGNORECASE)
-                highlighted_content = pattern.sub(
+            if keyword.strip():  # Only process non-empty keywords
+                # Use word boundary regex to match complete words only
+                # This prevents partial matches like "AI" matching in "laid" or "RAG" matching in "leverage"
+                pattern = r'\b' + re.escape(keyword) + r'\b'
+                highlighted_content = re.sub(
+                    pattern,
                     f'<mark class="keyword-highlight">{keyword}</mark>',
-                    highlighted_content
+                    highlighted_content,
+                    flags=re.IGNORECASE
                 )
         
         return highlighted_content
@@ -477,7 +489,8 @@ class MultiAgentPharmaAgent:
         
     async def execute_workflow(self, keywords: List[str], start_date: datetime, 
                              end_date: datetime, search_type: str = 'standard',
-                             search_engines: List[str] = None) -> Dict[str, Any]:
+                             search_engines: List[str] = None, alert_title: str = None, 
+                             alert_header: str = None) -> Dict[str, Any]:
         """Execute the complete multi-agent workflow"""
         
         if search_engines is None:
@@ -602,7 +615,7 @@ class MultiAgentPharmaAgent:
             for article in filtered_articles:
                 try:
                     analysis = self.relevance_agent.analyze_relevance(
-                        article, keywords, search_type
+                        article, keywords, search_type, alert_title, alert_header
                     )
                     
                     # Update article with analysis results
@@ -642,25 +655,14 @@ class MultiAgentPharmaAgent:
                           f"{len([s for s in scores if 50 <= s < 80])} medium (50-79), "
                           f"{len([s for s in scores if s < 50])} low (<50)")
             
-            # Step 5: Filter by relevance
-            logger.info("🔍 Step 5: Filtering articles by relevance...")
-            min_relevance = 40  # Lowered from 50 to 40 to be more inclusive
-            final_articles = []
-            relevance_filter_stats = {"kept": 0, "filtered_out": 0}
-            
-            for article in filtered_articles:
-                if article.relevance_score and article.relevance_score >= min_relevance:
-                    final_articles.append(article)
-                    relevance_filter_stats["kept"] += 1
-                    logger.debug(f"✅ Kept: {article.title[:60]}... (score: {article.relevance_score})")
-                else:
-                    relevance_filter_stats["filtered_out"] += 1
-                    logger.debug(f"❌ Filtered: {article.title[:60]}... (score: {article.relevance_score})")
+            # Step 5: Use LLM-based relevance scoring (no hardcoded filtering)
+            logger.info("🔍 Step 5: Using LLM-based relevance scoring (no hardcoded filtering)...")
+            final_articles = filtered_articles  # Keep all articles, rely on LLM scoring
+            relevance_filter_stats = {"total_articles": len(final_articles), "llm_scored": len(final_articles)}
             
             workflow_results['metadata']['workflow_stats']['relevance_filtering'] = relevance_filter_stats
-            logger.info(f"✅ Relevance filtering complete: {relevance_filter_stats}")
-            print(f"🔍 RELEVANCE FILTERING: Kept {relevance_filter_stats['kept']} articles (≥{min_relevance}), "
-                  f"filtered {relevance_filter_stats['filtered_out']} (< {min_relevance})")
+            logger.info(f"✅ LLM-based relevance scoring complete: {relevance_filter_stats}")
+            print(f"🔍 LLM RELEVANCE SCORING: All {relevance_filter_stats['total_articles']} articles scored by LLM (no hardcoded filtering)")
             
             # Step 6: Enhance content
             logger.info("✨ Step 6: Enhancing content with keyword highlighting...")

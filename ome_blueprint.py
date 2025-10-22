@@ -397,27 +397,27 @@ def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], sele
                     keywords=unique_keywords,
                     start_date=start_date,
                     end_date=end_date,
-                    search_type=alert_row['search_type']
+                    search_type=alert_row['search_type'],
+                    alert_title=alert_row['header'],
+                    alert_header=alert_row['subheader']
                 ))
                 
                 if workflow_result['success']:
-                    # Filter results by relevance score > 65
+                    # Use all LLM-scored results (no hardcoded filtering)
                     filtered_results = []
                     for result in workflow_result['results']:
-                        relevance_score = result.get('relevance_score', 0)
-                        if relevance_score > 65:
-                            # Add alert context to result
-                            result['alert_context'] = {
-                                'user': alert_row['user'],
-                                'alert_title': alert_row['header'],
-                                'subheader': alert_row['subheader'],
-                                'email_subject': alert_row['email_subject'],
-                                'search_type': alert_row['search_type'],
-                                'source_select': alert_row['source_select'],
-                                'filter_type': alert_row['filter_type'],
-                                'include_links': alert_row['include_links']
-                            }
-                            filtered_results.append(result)
+                        # Add alert context to result
+                        result['alert_context'] = {
+                            'user': alert_row['user'],
+                            'alert_title': alert_row['header'],
+                            'subheader': alert_row['subheader'],
+                            'email_subject': alert_row['email_subject'],
+                            'search_type': alert_row['search_type'],
+                            'source_select': alert_row['source_select'],
+                            'filter_type': alert_row['filter_type'],
+                            'include_links': alert_row['include_links']
+                        }
+                        filtered_results.append(result)
                     
                     if filtered_results:
                         all_results.extend(filtered_results)
@@ -503,7 +503,9 @@ def process_multi_section_search(sections: List[Dict[str, Any]], start_date: dat
                     keywords=keywords,
                     start_date=start_date,
                     end_date=end_date,
-                    search_type=search_type
+                    search_type=search_type,
+                    alert_title=section['header'],
+                    alert_header=section['subheader']
                 ))
                 
                 if workflow_result['success']:
