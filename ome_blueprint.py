@@ -11,8 +11,6 @@ Usage:
     app.register_blueprint(ome_blueprint, url_prefix='/OME')
 """
 
-import os
-import sys
 import json
 import csv
 import io
@@ -151,52 +149,9 @@ def search_pubmed(keywords: List[str], max_results: int = 20, start_date: dateti
         return []
 
 def search_newsapi(keywords: List[str], max_results: int = 20) -> List[Dict[str, Any]]:
-    """Search NewsAPI for news articles (enhanced demo version with pharma focus)"""
-    # Enhanced sample data focused on pharma news
-    pharma_sources = [
-        "Reuters Health", "Medical News Today", "PharmaTimes", "FiercePharma", 
-        "BioPharma Dive", "Pharmaceutical Technology", "Drug Discovery Today"
-    ]
-    
-    sample_results = []
-    for i in range(min(max_results, 8)):  # Limit to 8 realistic samples
-        keyword = keywords[0] if keywords else "pharmaceutical"
-        source = pharma_sources[i % len(pharma_sources)]
-        
-        # Create more realistic pharma news titles
-        titles = [
-            f"New {keyword} Treatment Shows Promise in Clinical Trials",
-            f"FDA Approves Expanded Use of {keyword} for Additional Indications",
-            f"Pharmaceutical Company Reports Positive Results for {keyword} Study",
-            f"Research Reveals New Mechanism of Action for {keyword}",
-            f"Global Market for {keyword} Expected to Reach $X Billion by 2025",
-            f"Patient Outcomes Improve with Novel {keyword} Formulation",
-            f"Regulatory Update: {keyword} Receives Fast Track Designation",
-            f"Investment in {keyword} Development Reaches Record High"
-        ]
-        
-        title = titles[i % len(titles)]
-        
-        # Create more detailed content
-        content = f"""
-        Recent developments in {keyword} research have shown significant progress in clinical applications. 
-        The pharmaceutical industry continues to invest heavily in {keyword} development, with several 
-        companies reporting positive results from ongoing studies. Regulatory agencies are closely 
-        monitoring the safety and efficacy profiles of {keyword} treatments, with some products 
-        receiving expedited review status. Market analysts predict continued growth in the {keyword} 
-        sector, driven by increasing patient demand and technological advances in drug delivery systems.
-        """.strip()
-        
-        result = {
-            'title': title,
-            'content': content,
-            'url': f'https://example-pharma-news.com/{keyword.lower().replace(" ", "-")}-article-{i+1}',
-            'date': (datetime.now() - timedelta(days=i)).isoformat(),  # Stagger dates
-            'source': source
-        }
-        sample_results.append(result)
-    
-    return sample_results
+    """Search NewsAPI for news articles - requires API key configuration"""
+    print("NewsAPI search requires API key configuration")
+    return []
 
 def search_all_sources(keywords: List[str], max_results: int = 50, start_date: datetime = None, end_date: datetime = None) -> List[Dict[str, Any]]:
     """Search across all available sources with date filtering"""
@@ -310,45 +265,78 @@ def process_csv_upload(csv_content: str) -> Dict[str, Any]:
         csv_reader = csv.DictReader(io.StringIO(csv_content))
         sections = []
         users = set()
+        user_email_alerts = {}  # Track which users have email alerts enabled
         
         for row in csv_reader:
             # Extract required columns
             aliases = row.get('aliases', '').strip()
-            keywords = row.get('keywords', '').strip()
+            keywords = row.get('keyword', '').strip()  # Note: using 'keyword' as shown in demo
             search_type = row.get('search_type', 'standard').strip()
             subheader = row.get('subheader', '').strip()
-            header = row.get('header', '').strip()
+            header = row.get('alert_title', '').strip()  # Using alert_title as header
             user = row.get('user', '').strip()
+            email_alert = row.get('email_alert', '').strip().lower()
             
-            # Combine aliases and keywords, make unique
-            all_keywords = []
-            if aliases:
-                all_keywords.extend([alias.strip() for alias in aliases.split(',') if alias.strip()])
-            if keywords:
-                all_keywords.extend([kw.strip() for kw in keywords.split(',') if kw.strip()])
-            
-            # Remove duplicates and empty strings
-            unique_keywords = list(dict.fromkeys([kw for kw in all_keywords if kw]))
-            
-            if unique_keywords:  # Only add if we have keywords
-                section = {
-                    'aliases': aliases,
-                    'keywords': keywords,
-                    'combined_keywords': unique_keywords,
-                    'search_type': search_type,
-                    'subheader': subheader,
-                    'header': header,
-                    'user': user,
-                    'section_id': f"{user}_{header}_{subheader}".replace(' ', '_').replace('/', '_')
-                }
-                sections.append(section)
+            # Track users and their email alert preferences
+            if user:
                 users.add(user)
+                if user not in user_email_alerts:
+                    user_email_alerts[user] = []
+                
+                # Only add rows with email_alert = 'yes'
+                if email_alert == 'yes':
+                    user_email_alerts[user].append({
+                        'aliases': aliases,
+                        'keywords': keywords,
+                        'search_type': search_type,
+                        'subheader': subheader,
+                        'header': header,
+                        'user': user,
+                        'email_alert': email_alert,
+                        'email_subject': row.get('email_subject', '').strip(),
+                        'source_select': row.get('source_select', 'all').strip(),
+                        'filter_type': row.get('filter_type', '').strip(),
+                        'include_links': row.get('include_links', '').strip()
+                    })
+        
+        # Process each user's email alert rows
+        for user, alert_rows in user_email_alerts.items():
+            for alert_row in alert_rows:
+                # Combine aliases and keywords, make unique
+                all_keywords = []
+                if alert_row['aliases']:
+                    all_keywords.extend([alias.strip() for alias in alert_row['aliases'].split(',') if alias.strip()])
+                if alert_row['keywords']:
+                    all_keywords.extend([kw.strip() for kw in alert_row['keywords'].split(',') if kw.strip()])
+                
+                # Remove duplicates and empty strings
+                unique_keywords = list(dict.fromkeys([kw for kw in all_keywords if kw]))
+                
+                if unique_keywords:  # Only add if we have keywords
+                    section = {
+                        'aliases': alert_row['aliases'],
+                        'keywords': alert_row['keywords'],
+                        'combined_keywords': unique_keywords,
+                        'search_type': alert_row['search_type'],
+                        'subheader': alert_row['subheader'],
+                        'header': alert_row['header'],
+                        'user': alert_row['user'],
+                        'email_alert': alert_row['email_alert'],
+                        'email_subject': alert_row['email_subject'],
+                        'source_select': alert_row['source_select'],
+                        'filter_type': alert_row['filter_type'],
+                        'include_links': alert_row['include_links'],
+                        'section_id': f"{alert_row['user']}_{alert_row['header']}_{alert_row['subheader']}".replace(' ', '_').replace('/', '_')
+                    }
+                    sections.append(section)
         
         return {
             'success': True,
             'sections': sections,
             'users': list(users),
-            'total_sections': len(sections)
+            'user_email_alerts': user_email_alerts,
+            'total_sections': len(sections),
+            'users_with_alerts': len([u for u, alerts in user_email_alerts.items() if alerts])
         }
         
     except Exception as e:
@@ -357,7 +345,141 @@ def process_csv_upload(csv_content: str) -> Dict[str, Any]:
             'error': f'CSV processing failed: {str(e)}',
             'sections': [],
             'users': [],
-            'total_sections': 0
+            'user_email_alerts': {},
+            'total_sections': 0,
+            'users_with_alerts': 0
+        }
+
+def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], selected_user: str, start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """Process alerts for a specific user with email_alert = 'yes' and relevance score > 65"""
+    try:
+        if selected_user not in user_email_alerts:
+            return {
+                'success': False,
+                'error': f'User {selected_user} not found in uploaded data',
+                'results': []
+            }
+        
+        user_alert_rows = user_email_alerts[selected_user]
+        if not user_alert_rows:
+            return {
+                'success': False,
+                'error': f'No email alerts found for user {selected_user}',
+                'results': []
+            }
+        
+        print(f"Processing {len(user_alert_rows)} alerts for user: {selected_user}")
+        
+        all_results = []
+        processed_alerts = []
+        
+        for alert_row in user_alert_rows:
+            # Combine aliases and keywords, make unique
+            all_keywords = []
+            if alert_row['aliases']:
+                all_keywords.extend([alias.strip() for alias in alert_row['aliases'].split(',') if alias.strip()])
+            if alert_row['keywords']:
+                all_keywords.extend([kw.strip() for kw in alert_row['keywords'].split(',') if kw.strip()])
+            
+            # Remove duplicates and empty strings
+            unique_keywords = list(dict.fromkeys([kw for kw in all_keywords if kw]))
+            
+            if not unique_keywords:
+                continue
+                
+            print(f"Processing alert: {alert_row['header']} - {alert_row['subheader']}")
+            print(f"Keywords: {unique_keywords}")
+            
+            # Use agentic workflow if available
+            if AGENT_AVAILABLE and pharma_agent:
+                workflow_result = pharma_agent.execute_research_workflow(
+                    keywords=unique_keywords,
+                    start_date=start_date,
+                    end_date=end_date,
+                    search_type=alert_row['search_type']
+                )
+                
+                if workflow_result['success']:
+                    # Filter results by relevance score > 65
+                    filtered_results = []
+                    for result in workflow_result['results']:
+                        relevance_score = result.get('relevance_score', 0)
+                        if relevance_score > 65:
+                            # Add alert context to result
+                            result['alert_context'] = {
+                                'user': alert_row['user'],
+                                'alert_title': alert_row['header'],
+                                'subheader': alert_row['subheader'],
+                                'email_subject': alert_row['email_subject'],
+                                'search_type': alert_row['search_type'],
+                                'source_select': alert_row['source_select'],
+                                'filter_type': alert_row['filter_type'],
+                                'include_links': alert_row['include_links']
+                            }
+                            filtered_results.append(result)
+                    
+                    if filtered_results:
+                        all_results.extend(filtered_results)
+                        processed_alerts.append({
+                            'alert_title': alert_row['header'],
+                            'subheader': alert_row['subheader'],
+                            'keywords': unique_keywords,
+                            'results_count': len(filtered_results),
+                            'email_subject': alert_row['email_subject']
+                        })
+                else:
+                    print(f"Workflow failed for alert: {alert_row['header']}")
+            else:
+                # Fallback to basic search
+                raw_results = search_all_sources(unique_keywords, Config.MAX_RESULTS_PER_SOURCE, start_date, end_date)
+                filtered_results = filter_results(raw_results, unique_keywords, alert_row['search_type'])
+                
+                # Calculate relevance scores and filter by > 65
+                high_relevance_results = []
+                for result in filtered_results:
+                    relevance_score = calculate_relevance_score(result, unique_keywords)
+                    if relevance_score > 65:
+                        result['relevance_score'] = relevance_score
+                        result['alert_context'] = {
+                            'user': alert_row['user'],
+                            'alert_title': alert_row['header'],
+                            'subheader': alert_row['subheader'],
+                            'email_subject': alert_row['email_subject'],
+                            'search_type': alert_row['search_type'],
+                            'source_select': alert_row['source_select'],
+                            'filter_type': alert_row['filter_type'],
+                            'include_links': alert_row['include_links']
+                        }
+                        high_relevance_results.append(result)
+                
+                if high_relevance_results:
+                    all_results.extend(high_relevance_results)
+                    processed_alerts.append({
+                        'alert_title': alert_row['header'],
+                        'subheader': alert_row['subheader'],
+                        'keywords': unique_keywords,
+                        'results_count': len(high_relevance_results),
+                        'email_subject': alert_row['email_subject']
+                    })
+        
+        # Sort all results by relevance score
+        all_results.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        
+        return {
+            'success': True,
+            'user': selected_user,
+            'results': all_results,
+            'processed_alerts': processed_alerts,
+            'total_alerts': len(user_alert_rows),
+            'successful_alerts': len(processed_alerts),
+            'total_results': len(all_results)
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Alert processing failed: {str(e)}',
+            'results': []
         }
 
 def process_multi_section_search(sections: List[Dict[str, Any]], start_date: datetime, end_date: datetime) -> Dict[str, Any]:
@@ -1273,7 +1395,7 @@ HTML_TEMPLATE = """
             <!-- Batch Processing Tab -->
             <div class="tab-content" id="tab-batch">
                 <div class="alert alert-info">
-                    Upload a CSV file with columns: aliases, keywords, search_type, subheader, header, user
+                    Upload a CSV file with columns: keyword, aliases, search_type, subheader, alert_title, user, email_alert, email_subject, source_select, filter_type, include_links
                 </div>
 
                 <div class="upload-area" id="upload-area">
@@ -1281,6 +1403,31 @@ HTML_TEMPLATE = """
                     <p><strong>Click to upload</strong> or drag and drop</p>
                     <p style="font-size: 12px; color: #7f8c8d; margin-top: 5px;">CSV files only</p>
                     <input type="file" id="csv-file" accept=".csv" style="display: none;">
+                </div>
+
+                <!-- User Selection Section (hidden initially) -->
+                <div id="user-selection-section" style="display: none; margin-top: 20px;">
+                    <div class="form-group">
+                        <label>Select User to Process Alerts</label>
+                        <select id="user-select" class="form-group select">
+                            <option value="">Choose a user...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Start Date</label>
+                            <input type="date" id="batch-start-date">
+                        </div>
+                        <div class="form-group">
+                            <label>End Date</label>
+                            <input type="date" id="batch-end-date">
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-primary" id="process-alerts-btn" disabled>
+                        🔍 Process User Alerts
+                    </button>
                 </div>
 
                 <div id="batch-results" style="margin-top: 20px;"></div>
@@ -1301,8 +1448,8 @@ HTML_TEMPLATE = """
             <div class="sidebar-section" id="relevance-filter-section" style="display:none;">
                 <h3>🎚️ Relevance Filter</h3>
                 <div style="margin-bottom: 10px;">
-                    <label style="font-size: 12px; color: #7f8c8d;">Min Score: <span id="slider-value">50</span></label>
-                    <input type="range" id="relevance-slider" min="0" max="100" value="50" 
+                    <label style="font-size: 12px; color: #7f8c8d;">Min Score: <span id="slider-value">65</span></label>
+                    <input type="range" id="relevance-slider" min="0" max="100" value="65" 
                            style="width: 100%; margin-top: 5px;">
                 </div>
                 <div class="stat-item">
@@ -1612,7 +1759,7 @@ HTML_TEMPLATE = """
 
         // Store all results globally for filtering
         let allResults = [];
-        let currentMinScore = 50;
+        let currentMinScore = 65;
 
         // Filter results by relevance score
         function filterByRelevanceScore(minScore) {
@@ -1799,6 +1946,9 @@ HTML_TEMPLATE = """
             }
         });
 
+        // Store CSV upload data globally
+        let currentCSVData = null;
+
         async function uploadCSV(file) {
             const formData = new FormData();
             formData.append('file', file);
@@ -1817,10 +1967,33 @@ HTML_TEMPLATE = """
                     addActivity('CSV upload error: ' + data.error, 'error');
                     alert('Error: ' + data.error);
                 } else {
-                    addActivity('CSV processed: ' + data.sections.length + ' sections', 'success');
+                    currentCSVData = data;
+                    addActivity('CSV processed: ' + data.users_with_alerts + ' users with alerts', 'success');
+                    
+                    // Show user selection section
+                    document.getElementById('user-selection-section').style.display = 'block';
+                    
+                    // Populate user dropdown
+                    const userSelect = document.getElementById('user-select');
+                    userSelect.innerHTML = '<option value="">Choose a user...</option>';
+                    
+                    data.users.forEach(user => {
+                        const option = document.createElement('option');
+                        option.value = user;
+                        option.textContent = `${user} (${data.user_email_alerts[user] ? data.user_email_alerts[user].length : 0} alerts)`;
+                        userSelect.appendChild(option);
+                    });
+                    
+                    // Set default dates
+                    const today = new Date();
+                    const sevenDaysAgo = new Date(today);
+                    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                    document.getElementById('batch-end-date').valueAsDate = today;
+                    document.getElementById('batch-start-date').valueAsDate = sevenDaysAgo;
+                    
                     document.getElementById('batch-results').innerHTML = `
                         <div class="alert alert-success">
-                            CSV uploaded successfully: ${data.sections.length} sections found
+                            CSV uploaded successfully: ${data.users_with_alerts} users with email alerts found
                         </div>
                     `;
                 }
@@ -1830,6 +2003,101 @@ HTML_TEMPLATE = """
             } finally {
                 document.getElementById('loading-overlay').classList.remove('active');
             }
+        }
+
+        // User selection handling
+        document.getElementById('user-select').addEventListener('change', function() {
+            const processBtn = document.getElementById('process-alerts-btn');
+            processBtn.disabled = !this.value;
+        });
+
+        // Process alerts button handler
+        document.getElementById('process-alerts-btn').addEventListener('click', async function() {
+            const selectedUser = document.getElementById('user-select').value;
+            const startDate = document.getElementById('batch-start-date').value;
+            const endDate = document.getElementById('batch-end-date').value;
+            
+            if (!selectedUser || !currentCSVData) {
+                alert('Please select a user and ensure CSV data is loaded');
+                return;
+            }
+
+            try {
+                document.getElementById('loading-overlay').classList.add('active');
+                addActivity(`Processing alerts for user: ${selectedUser}`, 'info');
+                
+                const response = await fetch(`${BASE_URL}/process_user_alerts`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        upload_id: currentCSVData.upload_id,
+                        selected_user: selectedUser,
+                        start_date: startDate,
+                        end_date: endDate
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    addActivity('Alert processing error: ' + data.error, 'error');
+                    alert('Error: ' + data.error);
+                } else {
+                    addActivity(`Processed ${data.total_results} results for ${data.successful_alerts} alerts`, 'success');
+                    
+                    // Display results
+                    displayBatchResults(data);
+                }
+            } catch (error) {
+                addActivity('Alert processing failed: ' + error.message, 'error');
+                alert('Error: ' + error.message);
+            } finally {
+                document.getElementById('loading-overlay').classList.remove('active');
+            }
+        });
+
+        // Display batch processing results
+        function displayBatchResults(data) {
+            const batchResults = document.getElementById('batch-results');
+            
+            let html = `
+                <div class="alert alert-success">
+                    <h3>Alert Processing Complete</h3>
+                    <p><strong>User:</strong> ${data.user}</p>
+                    <p><strong>Total Alerts:</strong> ${data.total_alerts}</p>
+                    <p><strong>Successful Alerts:</strong> ${data.successful_alerts}</p>
+                    <p><strong>Total Results:</strong> ${data.total_results} (relevance score > 65)</p>
+                </div>
+            `;
+            
+            if (data.processed_alerts && data.processed_alerts.length > 0) {
+                html += '<div class="alert alert-info"><h4>Processed Alerts:</h4><ul>';
+                data.processed_alerts.forEach(alert => {
+                    html += `<li><strong>${alert.alert_title}</strong> - ${alert.subheader}: ${alert.results_count} results</li>`;
+                });
+                html += '</ul></div>';
+            }
+            
+            if (data.results && data.results.length > 0) {
+                html += '<div class="alert alert-info"><h4>Results:</h4>';
+                data.results.forEach((result, index) => {
+                    const alertContext = result.alert_context || {};
+                    html += `
+                        <div class="result-card" style="margin-bottom: 15px; padding: 15px; border: 1px solid #ddd; border-radius: 4px;">
+                            <h5><a href="${result.url}" target="_blank">${index + 1}. ${result.title}</a></h5>
+                            <p><strong>Relevance Score:</strong> ${result.relevance_score || 'N/A'}</p>
+                            <p><strong>Alert:</strong> ${alertContext.alert_title || 'N/A'}</p>
+                            <p><strong>Source:</strong> ${result.source || 'N/A'}</p>
+                            <p>${result.summary || result.content?.substring(0, 200) || 'No summary available'}...</p>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+            
+            batchResults.innerHTML = html;
         }
 
         // Mark APIs as configured (placeholder - should come from backend)
@@ -2152,6 +2420,7 @@ def upload_csv():
             csv_uploads_store[upload_id] = {
                 'sections': csv_result['sections'],
                 'users': csv_result['users'],
+                'user_email_alerts': csv_result['user_email_alerts'],
                 'timestamp': datetime.now()
             }
             
@@ -2160,7 +2429,9 @@ def upload_csv():
                 'upload_id': upload_id,
                 'sections': csv_result['sections'],
                 'users': csv_result['users'],
-                'total_sections': csv_result['total_sections']
+                'user_email_alerts': csv_result['user_email_alerts'],
+                'total_sections': csv_result['total_sections'],
+                'users_with_alerts': csv_result['users_with_alerts']
             })
         else:
             return jsonify({
@@ -2172,6 +2443,85 @@ def upload_csv():
         return jsonify({
             'success': False,
             'error': f'CSV upload failed: {str(e)}'
+        }), 500
+
+@ome_blueprint.route('/process_user_alerts', methods=['POST'])
+def process_user_alerts_route():
+    """Process alerts for a specific user from uploaded CSV"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        upload_id = data.get('upload_id')
+        selected_user = data.get('selected_user')
+        start_date_str = data.get('start_date', '')
+        end_date_str = data.get('end_date', '')
+        
+        if not upload_id or not selected_user:
+            return jsonify({'error': 'Upload ID and selected user are required'}), 400
+        
+        if upload_id not in csv_uploads_store:
+            return jsonify({'error': 'Upload not found'}), 404
+        
+        csv_data = csv_uploads_store[upload_id]
+        user_email_alerts = csv_data.get('user_email_alerts', {})
+        
+        # Parse dates with default to last 7 days
+        try:
+            if start_date_str:
+                start_date = datetime.fromisoformat(start_date_str)
+            else:
+                start_date = datetime.now() - timedelta(days=7)
+            
+            if end_date_str:
+                end_date = datetime.fromisoformat(end_date_str)
+            else:
+                end_date = datetime.now()
+                
+        except ValueError as e:
+            return jsonify({'error': f'Invalid date format: {str(e)}'}), 400
+        
+        # Process alerts for the selected user
+        result = process_user_alerts(user_email_alerts, selected_user, start_date, end_date)
+        
+        if result['success']:
+            # Store results for export
+            session_id = f"user_alerts_{selected_user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            search_results_store[session_id] = {
+                'results': result['results'],
+                'metadata': {
+                    'user': selected_user,
+                    'processed_alerts': result['processed_alerts'],
+                    'total_alerts': result['total_alerts'],
+                    'successful_alerts': result['successful_alerts'],
+                    'timestamp': datetime.now().isoformat(),
+                    'alert_type': 'user_csv_alerts'
+                },
+                'timestamp': datetime.now()
+            }
+            
+            return jsonify({
+                'success': True,
+                'session_id': session_id,
+                'user': selected_user,
+                'results': result['results'],
+                'processed_alerts': result['processed_alerts'],
+                'total_alerts': result['total_alerts'],
+                'successful_alerts': result['successful_alerts'],
+                'total_results': result['total_results']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result['error']
+            }), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Alert processing failed: {str(e)}'
         }), 500
 
 @ome_blueprint.route('/export_html/<session_id>')

@@ -31,9 +31,9 @@ if __name__ == '__main__':
     app.run(debug=True)
 ```
 
-### Run Example
+### Run the App
 ```bash
-python example_integration.py
+python -c "from flask import Flask; from ome_blueprint import ome_blueprint; app = Flask(__name__); app.register_blueprint(ome_blueprint, url_prefix='/OME'); app.run(debug=True)"
 ```
 
 Visit: http://localhost:5000/OME/
@@ -62,8 +62,6 @@ Visit: http://localhost:5000/OME/
 - `pharma_agent.py` - Base pharma agent
 - `config.py` - Configuration loader
 - `constants.py` - API keys
-- `example_integration.py` - Integration example
-- `test_blueprint.py` - Tests
 
 ## License
 
