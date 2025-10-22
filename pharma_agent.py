@@ -49,8 +49,8 @@ class PharmaNewsAgent:
         self.openai_client = None
         if self.api_status['openai_configured']:
             try:
-                from openai import OpenAI
-                self.openai_client = OpenAI(api_key=self.config.OPENAI_API_KEY)
+                from config import create_openai_client
+                self.openai_client = create_openai_client(self.config)
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI client: {e}")
                 self.api_status['openai_configured'] = False
@@ -1770,7 +1770,7 @@ Respond with a JSON array containing analysis for each article in order. Example
                     logger.info(f"📞 Making OpenAI API call {curation_stats['openai_api_calls'] + 1} for batch of {len(batch)} articles...")
                     
                     response = self.openai_client.chat.completions.create(
-                        model=self.config.OPENAI_MODEL,
+                        model=self.config.get_model_name('main'),
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=self.config.MAX_TOKENS,
                         temperature=self.config.TEMPERATURE

@@ -12,8 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-from openai import OpenAI
-from config import Config
+from config import Config, create_openai_client
 from difflib import SequenceMatcher
 
 # Configure logging
@@ -44,7 +43,7 @@ class DateExtractionAgent:
     
     def __init__(self, config: Config):
         self.config = config
-        self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+        self.openai_client = create_openai_client(config)
         
     def extract_date(self, article: Dict[str, Any]) -> Optional[datetime]:
         """Extract date from article using multiple strategies with full context"""
@@ -153,7 +152,7 @@ Return ONLY the date or "none"."""
             
             # Use faster, cheaper model for date extraction
             response = self.openai_client.chat.completions.create(
-                model=self.config.DATE_EXTRACTION_MODEL,  # Use gpt-3.5-turbo instead
+                model=self.config.get_model_name('date_extraction'),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -236,7 +235,7 @@ class RelevanceAgent:
     
     def __init__(self, config: Config):
         self.config = config
-        self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+        self.openai_client = create_openai_client(config)
         
     def analyze_relevance(self, article: ArticleData, keywords: List[str], search_type: str) -> Dict[str, Any]:
         """Analyze article relevance and provide detailed scoring"""
@@ -295,7 +294,7 @@ EVALUATION CRITERIA:
 Return ONLY the JSON object, nothing else."""
             
             response = self.openai_client.chat.completions.create(
-                model=self.config.OPENAI_MODEL,
+                model=self.config.get_model_name('main'),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
