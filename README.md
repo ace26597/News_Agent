@@ -1,5 +1,7 @@
 # Pharma News Research Agent - Flask Blueprint
 
+https://www.mermaidchart.com/app/projects/aafc7971-6213-42b5-8d9b-68bc066e3d3a/diagrams/77269448-8b76-476c-a55a-660e8871b315/share/invite/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJkb2N1bWVudElEIjoiNzcyNjk0NDgtOGI3Ni00NzZjLWE1NWEtNjYwZTg4NzFiMzE1IiwiYWNjZXNzIjoiRWRpdCIsImlhdCI6MTc2MTE3MjQ4N30.fk8Ra-v4EoC2eB2Y1cVVwN4RDykIS19-S5C__jF9DDQ 
+
 AI-powered pharmaceutical news research with multi-source data collection.
 
 ## Quick Start

@@ -33,6 +33,7 @@ class ArticleData:
     summary: Optional[str] = None
     highlighted_content: Optional[str] = None
     mentioned_keywords: Optional[List[str]] = None
+    pertinent_keywords: Optional[List[str]] = None
     article_type: Optional[str] = None
     clinical_significance: Optional[str] = None
     regulatory_impact: Optional[str] = None
@@ -271,6 +272,7 @@ OUTPUT FORMAT (raw JSON only, no markdown):
     "relevance_reason": "<detailed explanation of why this score was assigned>",
     "article_type": "<research|news|press_release|company_page|clinical_trial|regulatory|other>",
     "mentioned_keywords": ["<exact keywords found in content>"],
+    "pertinent_keywords": ["<additional relevant keywords/phrases from article content that are related to the search topic>"],
     "clinical_significance": "<clinical relevance explanation or 'None'>",
     "regulatory_impact": "<regulatory implications or 'None'>",
     "market_impact": "<market implications or 'None'>",
@@ -293,11 +295,13 @@ EVALUATION CRITERIA (Analyze each aspect):
 5. Regulatory Relevance: Are there FDA approvals, regulatory decisions, or guidelines?
 6. Market Impact: Business implications, commercial developments, or market dynamics?
 7. Source Credibility: Is it from a reputable source (PubMed, peer-reviewed, official news)?
+8. Pertinent Keywords: Extract additional relevant terms, drug names, conditions, technologies, or concepts from the article that relate to the search topic
 
 IMPORTANT: 
 - Score based ONLY on the actual content and context provided
 - Consider the alert title/header when provided for additional context
 - Look for EXACT keyword matches, not partial matches
+- For pertinent_keywords: Extract 3-10 additional relevant terms/phrases from the article content that are semantically related to the search keywords
 - Provide detailed reasoning for your score
 
 Return ONLY the JSON object, nothing else."""
@@ -373,16 +377,89 @@ class ContentEnhancementAgent:
     def __init__(self, config: Config):
         self.config = config
     
+    def extract_relevant_content_window(self, content: str, keywords: List[str], min_chars: int = 200, max_chars: int = 5000) -> str:
+        """Extract a relevant window of content containing keywords"""
+        if not content or not keywords:
+            return content[:max_chars] if content else ""
+        
+        # Find all keyword positions in the content
+        keyword_positions = []
+        content_lower = content.lower()
+        
+        for keyword in keywords:
+            if keyword.strip():
+                keyword_lower = keyword.lower()
+                start = 0
+                while True:
+                    pos = content_lower.find(keyword_lower, start)
+                    if pos == -1:
+                        break
+                    keyword_positions.append((pos, pos + len(keyword)))
+                    start = pos + 1
+        
+        if not keyword_positions:
+            # No keywords found, return beginning of content
+            return content[:max_chars]
+        
+        # Sort positions and find the best window
+        keyword_positions.sort()
+        
+        # Find the window that contains the most keywords
+        best_window = None
+        max_keywords_in_window = 0
+        
+        for i, (start_pos, end_pos) in enumerate(keyword_positions):
+            # Try different window sizes around this keyword
+            for window_size in [min_chars, min_chars * 2, min_chars * 3, max_chars]:
+                window_start = max(0, start_pos - window_size // 2)
+                window_end = min(len(content), window_start + window_size)
+                
+                # Count keywords in this window
+                keywords_in_window = 0
+                for kw_start, kw_end in keyword_positions:
+                    if window_start <= kw_start < window_end:
+                        keywords_in_window += 1
+                
+                # Check if this window is better
+                if keywords_in_window > max_keywords_in_window or (keywords_in_window == max_keywords_in_window and window_end - window_start > (best_window[1] - best_window[0] if best_window else 0)):
+                    max_keywords_in_window = keywords_in_window
+                    best_window = (window_start, window_end)
+        
+        if best_window:
+            window_start, window_end = best_window
+            # Try to expand window to include more context if possible
+            while window_end - window_start < max_chars and window_end < len(content):
+                window_end += 100
+            while window_end - window_start < max_chars and window_start > 0:
+                window_start -= 100
+            
+            extracted_content = content[window_start:window_end]
+            
+            # Add ellipsis if we're not showing the full content
+            if window_start > 0:
+                extracted_content = "..." + extracted_content
+            if window_end < len(content):
+                extracted_content = extracted_content + "..."
+                
+            return extracted_content
+        
+        # Fallback: return beginning of content
+        return content[:max_chars]
+    
     def enhance_content(self, article: ArticleData, keywords: List[str]) -> str:
         """Create highlighted version of content with keyword emphasis - matches complete words only"""
         content = article.content
         mentioned_keywords = article.mentioned_keywords or []
+        pertinent_keywords = article.pertinent_keywords or []
         
-        # Combine search keywords with mentioned keywords
-        all_keywords = list(set(keywords + mentioned_keywords))
+        # Combine search keywords with mentioned and pertinent keywords
+        all_keywords = list(set(keywords + mentioned_keywords + pertinent_keywords))
+        
+        # Extract relevant content window containing keywords
+        relevant_content = self.extract_relevant_content_window(content, all_keywords)
         
         # Create highlighted content with word boundary matching
-        highlighted_content = content
+        highlighted_content = relevant_content
         for keyword in all_keywords:
             if keyword.strip():  # Only process non-empty keywords
                 # Use word boundary regex to match complete words only
@@ -623,6 +700,7 @@ class MultiAgentPharmaAgent:
                     article.relevance_reason = analysis["relevance_reason"]
                     article.article_type = analysis["article_type"]
                     article.mentioned_keywords = analysis["mentioned_keywords"]
+                    article.pertinent_keywords = analysis.get("pertinent_keywords", [])
                     article.clinical_significance = analysis["clinical_significance"]
                     article.regulatory_impact = analysis["regulatory_impact"]
                     article.market_impact = analysis["market_impact"]
@@ -696,6 +774,7 @@ class MultiAgentPharmaAgent:
                     'summary': article.summary,
                     'highlighted_content': article.highlighted_content,
                     'mentioned_keywords': article.mentioned_keywords,
+                    'pertinent_keywords': article.pertinent_keywords,
                     'article_type': article.article_type,
                     'clinical_significance': article.clinical_significance,
                     'regulatory_impact': article.regulatory_impact,

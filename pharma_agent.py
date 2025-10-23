@@ -640,7 +640,7 @@ class PharmaNewsAgent:
                 'sort': 'relevance',
                 'email': self.config.PUBMED_EMAIL,
                 'tool': 'pharma-research-agent',
-                'api_key': getattr(self.config, 'PUBMED_API_KEY', None)  # Optional API key for higher rate limits
+                'api_key': self.config.NCBI_API_KEY  # NCBI API key for higher rate limits (3->10 req/sec)
             }
             
             # Remove None values

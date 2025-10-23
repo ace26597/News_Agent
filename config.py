@@ -30,6 +30,7 @@ class Config:
     NEWSAPI_KEY = getattr(constants, 'NEWSAPI_KEY', None) if constants else None
     EXA_API_KEY = getattr(constants, 'EXA_API_KEY', None) if constants else None
     PUBMED_EMAIL = getattr(constants, 'PUBMED_EMAIL', None) if constants else None
+    NCBI_API_KEY = getattr(constants, 'NCBI_API_KEY', None) if constants else None
     
     # Azure OpenAI Configuration
     AZURE_OPENAI_API_KEY = getattr(constants, 'AZURE_OPENAI_API_KEY', None) if constants else None
@@ -84,7 +85,8 @@ class Config:
             'tavily_configured': bool(cls.TAVILY_API_KEY),
             'exa_configured': bool(cls.EXA_API_KEY),
             'newsapi_configured': bool(cls.NEWSAPI_KEY),
-            'pubmed_configured': bool(cls.PUBMED_EMAIL)
+            'pubmed_configured': bool(cls.PUBMED_EMAIL),
+            'ncbi_api_configured': bool(cls.NCBI_API_KEY)
         }
     
     @classmethod
