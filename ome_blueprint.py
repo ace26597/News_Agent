@@ -17,7 +17,7 @@ import io
 import os
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import requests
 from pathlib import Path
 from flask import Blueprint, render_template_string, request, jsonify, send_file
@@ -107,6 +107,10 @@ def save_batch_result_html(user: str, alert_data: Dict[str, Any], results: List[
             'timestamp': timestamp.isoformat(),
             'html_file': filename
         }
+        
+        # Generate hash for URL sharing
+        metadata['hash'] = generate_result_hash(metadata)
+        metadata['share_url'] = f"#{metadata['hash']}"
         
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
@@ -346,8 +350,92 @@ def generate_single_alert_html(alert_data: Dict[str, Any], results: List[Dict[st
     
     return html_content
 
+def get_global_history() -> List[Dict[str, Any]]:
+    """Get all recent alerts processed (both batch and single search)"""
+    try:
+        history = []
+        
+        # Get batch processing history from file system
+        if BATCH_RESULTS_DIR.exists():
+            for user_dir in BATCH_RESULTS_DIR.iterdir():
+                if user_dir.is_dir():
+                    for metadata_file in user_dir.glob("*_metadata.json"):
+                        try:
+                            with open(metadata_file, 'r', encoding='utf-8') as f:
+                                metadata = json.load(f)
+                                # Add type and hash for URL sharing
+                                metadata['type'] = 'batch'
+                                metadata['hash'] = generate_result_hash(metadata)
+                                metadata['share_url'] = f"#{metadata['hash']}"
+                                history.append(metadata)
+                        except Exception as e:
+                            print(f"Error reading metadata file {metadata_file}: {e}")
+        
+        # Get single search history from search_results_store
+        for session_id, data in search_results_store.items():
+            if session_id.startswith('search_') and 'metadata' in data:
+                metadata = data['metadata'].copy()
+                metadata['type'] = 'single'
+                metadata['session_id'] = session_id
+                metadata['results_count'] = len(data.get('results', []))
+                metadata['hash'] = generate_result_hash(metadata)
+                metadata['share_url'] = f"#{metadata['hash']}"
+                history.append(metadata)
+        
+        # Sort by timestamp (newest first)
+        history.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        # Limit to last 50 entries
+        return history[:50]
+        
+    except Exception as e:
+        print(f"Error getting global history: {e}")
+        return []
+
+def generate_result_hash(metadata: Dict[str, Any]) -> str:
+    """Generate a unique hash for result sharing"""
+    import hashlib
+    
+    # Create a unique identifier from metadata
+    hash_string = f"{metadata.get('timestamp', '')}_{metadata.get('type', '')}_{metadata.get('user', '')}_{metadata.get('session_id', '')}"
+    return hashlib.md5(hash_string.encode()).hexdigest()[:12]
+
+def get_result_by_hash(hash_id: str) -> Optional[Dict[str, Any]]:
+    """Get result by hash ID for URL sharing"""
+    try:
+        # Check batch results
+        if BATCH_RESULTS_DIR.exists():
+            for user_dir in BATCH_RESULTS_DIR.iterdir():
+                if user_dir.is_dir():
+                    for metadata_file in user_dir.glob("*_metadata.json"):
+                        try:
+                            with open(metadata_file, 'r', encoding='utf-8') as f:
+                                metadata = json.load(f)
+                                metadata['type'] = 'batch'
+                                metadata['hash'] = generate_result_hash(metadata)
+                                if metadata['hash'] == hash_id:
+                                    return metadata
+                        except Exception as e:
+                            continue
+        
+        # Check single search results
+        for session_id, data in search_results_store.items():
+            if session_id.startswith('search_') and 'metadata' in data:
+                metadata = data['metadata'].copy()
+                metadata['type'] = 'single'
+                metadata['session_id'] = session_id
+                metadata['hash'] = generate_result_hash(metadata)
+                if metadata['hash'] == hash_id:
+                    return metadata
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error getting result by hash: {e}")
+        return None
+
 def get_user_batch_history(user: str) -> List[Dict[str, Any]]:
-    """Get batch processing history for a user"""
+    """Get batch processing history for a user (legacy function)"""
     try:
         user_dir = BATCH_RESULTS_DIR / user
         if not user_dir.exists():
@@ -1769,18 +1857,18 @@ HTML_TEMPLATE = """
             <!-- Results History Tab -->
             <div class="tab-content" id="tab-results">
                 <div class="alert alert-info">
-                    <h3>📚 Batch Processing History</h3>
-                    <p>View and access previous batch processing results</p>
+                    <h3>📚 Recent Alerts History</h3>
+                    <p>View and access all recent alerts processed (both batch and single search)</p>
                 </div>
                 
                 <div style="margin-bottom: 20px;">
-                    <label for="history-user-select" style="display: block; margin-bottom: 8px; font-weight: 600; color: #2c3e50;">Select User:</label>
-                    <select id="history-user-select" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
-                        <option value="">Choose a user to view history...</option>
-                    </select>
+                    <button onclick="loadGlobalHistory()" class="btn btn-primary" style="margin-right: 10px;">
+                        🔄 Refresh History
+                    </button>
+                    <span id="history-loading" style="display: none; color: #7f8c8d;">Loading...</span>
                 </div>
                 
-                <div id="history-container"></div>
+                <div id="global-history-container"></div>
             </div>
         </div>
 
@@ -1880,124 +1968,177 @@ HTML_TEMPLATE = """
             });
         });
 
-        // History functionality
-        async function loadHistoryUsers() {
+        // Global History functionality
+        async function loadGlobalHistory() {
             try {
-                // Get users from CSV uploads
-                const users = [];
-                for (const [uploadId, data] of Object.entries(currentCSVData?.user_email_alerts || {})) {
-                    users.push(...Object.keys(data));
-                }
+                document.getElementById('history-loading').style.display = 'inline';
+                addActivity('Loading global history...', 'info');
                 
-                const uniqueUsers = [...new Set(users)];
-                const userSelect = document.getElementById('history-user-select');
-                userSelect.innerHTML = '<option value="">Choose a user to view history...</option>';
-                
-                uniqueUsers.forEach(user => {
-                    const option = document.createElement('option');
-                    option.value = user;
-                    option.textContent = user;
-                    userSelect.appendChild(option);
-                });
-                
-                // Add event listener for user selection
-                userSelect.addEventListener('change', loadUserHistory);
-                
-            } catch (error) {
-                console.error('Error loading history users:', error);
-                document.getElementById('history-container').innerHTML = '<div class="alert alert-warning">No CSV data available. Please upload a CSV file first.</div>';
-            }
-        }
-
-        async function loadUserHistory() {
-            const userSelect = document.getElementById('history-user-select');
-            const selectedUser = userSelect.value;
-            
-            if (!selectedUser) {
-                document.getElementById('history-container').innerHTML = '';
-                return;
-            }
-            
-            try {
-                addActivity(`Loading history for ${selectedUser}...`, 'info');
-                
-                const response = await fetch(`${BASE_URL}/batch_history/${encodeURIComponent(selectedUser)}`);
+                const response = await fetch(`${BASE_URL}/global_history`);
                 const data = await response.json();
                 
                 if (data.success) {
-                    displayUserHistory(data.history, selectedUser);
-                    addActivity(`Loaded ${data.total_entries} history entries for ${selectedUser}`, 'success');
+                    displayGlobalHistory(data.history);
+                    addActivity(`Loaded ${data.total_entries} history entries`, 'success');
                 } else {
-                    throw new Error(data.error || 'Failed to load history');
+                    addActivity(`Error loading history: ${data.error}`, 'error');
+                    document.getElementById('global-history-container').innerHTML = 
+                        `<div class="alert alert-danger">Error: ${data.error}</div>`;
                 }
-                
             } catch (error) {
-                console.error('Error loading user history:', error);
                 addActivity(`Error loading history: ${error.message}`, 'error');
-                document.getElementById('history-container').innerHTML = '<div class="alert alert-danger">Failed to load history. Please try again.</div>';
+                document.getElementById('global-history-container').innerHTML = 
+                    `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            } finally {
+                document.getElementById('history-loading').style.display = 'none';
             }
         }
 
-        function displayUserHistory(history, user) {
-            const container = document.getElementById('history-container');
+        function displayGlobalHistory(history) {
+            const container = document.getElementById('global-history-container');
             
             if (!history || history.length === 0) {
-                container.innerHTML = '<div class="alert alert-info">No batch processing history found for this user.</div>';
+                container.innerHTML = '<div class="alert alert-info">No history found.</div>';
                 return;
             }
             
-            let html = `<div class="alert alert-success"><h4>📚 History for ${user}</h4><p>Found ${history.length} batch processing entries</p></div>`;
+            let html = '<div class="history-list">';
             
             history.forEach((entry, index) => {
-                const timestamp = new Date(entry.timestamp);
-                const alertData = entry.alert_data;
+                const timestamp = new Date(entry.timestamp).toLocaleString();
+                const type = entry.type || 'unknown';
+                const typeIcon = type === 'batch' ? '📋' : '🔍';
+                const typeLabel = type === 'batch' ? 'Batch Alert' : 'Single Search';
+                
+                // Get title/header based on type
+                let title = 'Unknown Alert';
+                let resultsCount = entry.results_count || 0;
+                let user = entry.user || 'Unknown User';
+                
+                if (type === 'batch') {
+                    const alertData = entry.alert_data || {};
+                    title = alertData.header || 'Unknown Alert';
+                } else {
+                    const keywords = entry.keywords || [];
+                    title = keywords.length > 0 ? keywords.join(', ') : 'Single Search';
+                }
                 
                 html += `
-                    <div class="result-card" style="margin-bottom: 15px;">
-                        <div class="result-header">
-                            <div class="result-title">
-                                <h4 style="margin: 0; color: #2c3e50;">${alertData.header}</h4>
-                                <p style="margin: 5px 0; color: #7f8c8d; font-size: 14px;">${alertData.subheader}</p>
+                <div class="history-item" style="background: white; padding: 15px; margin-bottom: 15px; border-radius: 8px; border-left: 4px solid ${type === 'batch' ? '#e74c3c' : '#3498db'}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                                <span style="margin-right: 8px; font-size: 16px;">${typeIcon}</span>
+                                <h4 style="margin: 0; color: #2c3e50;">${title}</h4>
+                                <span style="margin-left: 10px; padding: 2px 8px; background: ${type === 'batch' ? '#e74c3c' : '#3498db'}; color: white; border-radius: 12px; font-size: 11px;">${typeLabel}</span>
                             </div>
-                            <div class="result-scores">
-                                <span class="badge badge-score">${entry.results_count} results</span>
-                                <span class="badge badge-type">${timestamp.toLocaleDateString()}</span>
-                            </div>
+                            <p style="margin: 0; color: #7f8c8d; font-size: 12px;">Processed: ${timestamp}</p>
+                            <p style="margin: 5px 0 0 0; color: #27ae60; font-size: 13px; font-weight: 600;">${resultsCount} results • User: ${user}</p>
                         </div>
-                        
-                        <div class="result-summary">
-                            <strong>Keywords:</strong> ${alertData.keywords.join(', ')}
-                        </div>
-                        
-                        <div style="margin-top: 10px;">
-                            <button onclick="viewHistoryHTML('${user}', '${entry.html_file}')" class="btn btn-primary" style="margin-right: 10px;">
-                                📄 View HTML Report
+                        <div style="display: flex; gap: 8px;">
+                            <button onclick="shareResult('${entry.hash}')" class="btn btn-sm btn-outline-secondary" title="Share URL">
+                                🔗 Share
                             </button>
-                            <button onclick="downloadHistoryHTML('${user}', '${entry.html_file}')" class="btn btn-success">
-                                💾 Download HTML
+                            <button onclick="viewResult('${entry.hash}')" class="btn btn-sm btn-outline-primary">
+                                👁️ View
+                            </button>
+                            <button onclick="downloadResult('${entry.hash}')" class="btn btn-sm btn-success">
+                                📥 Download
                             </button>
                         </div>
                     </div>
+                </div>
                 `;
             });
             
+            html += '</div>';
             container.innerHTML = html;
         }
 
-        function viewHistoryHTML(user, filename) {
-            const url = `${BASE_URL}/batch_history_html/${encodeURIComponent(user)}/${encodeURIComponent(filename)}`;
-            window.open(url, '_blank');
+        function shareResult(hash) {
+            const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+            navigator.clipboard.writeText(url).then(() => {
+                addActivity('Share URL copied to clipboard!', 'success');
+                showCopyNotification();
+            }).catch(() => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = url;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                addActivity('Share URL copied to clipboard!', 'success');
+                showCopyNotification();
+            });
         }
 
-        function downloadHistoryHTML(user, filename) {
-            const url = `${BASE_URL}/batch_history_html/${encodeURIComponent(user)}/${encodeURIComponent(filename)}`;
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+        function viewResult(hash) {
+            // Load result by hash and display it
+            loadResultByHash(hash, 'view');
         }
+
+        function downloadResult(hash) {
+            // Load result by hash and download it
+            loadResultByHash(hash, 'download');
+        }
+
+        async function loadResultByHash(hash, action) {
+            try {
+                addActivity(`Loading result ${hash}...`, 'info');
+                
+                const response = await fetch(`${BASE_URL}/result_by_hash/${hash}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    const result = data.result;
+                    
+                    if (action === 'view') {
+                        if (result.type === 'batch') {
+                            const url = `${BASE_URL}/batch_history_html/${encodeURIComponent(result.user)}/${encodeURIComponent(result.html_file)}`;
+                            window.open(url, '_blank');
+                        } else {
+                            const url = `${BASE_URL}/export_html/${result.session_id}`;
+                            window.open(url, '_blank');
+                        }
+                        addActivity('Result opened in new tab', 'success');
+                    } else if (action === 'download') {
+                        if (result.type === 'batch') {
+                            const url = `${BASE_URL}/batch_history_html/${encodeURIComponent(result.user)}/${encodeURIComponent(result.html_file)}`;
+                            const link = document.createElement('a');
+                            link.href = url;
+                            link.download = result.html_file;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                        } else {
+                            const url = `${BASE_URL}/export_html/${result.session_id}?download=true`;
+                            window.open(url, '_blank');
+                        }
+                        addActivity('Result downloaded', 'success');
+                    }
+                } else {
+                    addActivity(`Error loading result: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                addActivity(`Error loading result: ${error.message}`, 'error');
+            }
+        }
+
+        // Handle URL hash on page load
+        function handleUrlHash() {
+            const hash = window.location.hash.substring(1);
+            if (hash) {
+                // Auto-load the result if hash is present
+                loadResultByHash(hash, 'view');
+            }
+        }
+
+        // Load global history on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadGlobalHistory();
+            handleUrlHash();
+        });
 
         // Quick fill functions
         function quickFill(type) {
@@ -3157,15 +3298,22 @@ def search():
         
         # Store results for CSV download
         session_id = f"search_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        metadata = {
+            'keywords': keywords,
+            'search_type': search_type,
+            'alert_name': alert_name,
+            'section_name': section_name,
+            'timestamp': datetime.now().isoformat(),
+            'session_id': session_id
+        }
+        
+        # Generate hash for URL sharing
+        metadata['hash'] = generate_result_hash(metadata)
+        metadata['share_url'] = f"#{metadata['hash']}"
+        
         search_results_store[session_id] = {
             'results': processed_results,
-            'metadata': {
-                'keywords': keywords,
-                'search_type': search_type,
-                'alert_name': alert_name,
-                'section_name': section_name,
-                'timestamp': datetime.now().isoformat()
-            },
+            'metadata': metadata,
             'timestamp': datetime.now()
         }
         
@@ -3356,16 +3504,23 @@ def process_user_alerts_route():
         if result['success']:
             # Store results for export
             session_id = f"user_alerts_{selected_user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            metadata = {
+                'user': selected_user,
+                'processed_alerts': result['processed_alerts'],
+                'total_alerts': result['total_alerts'],
+                'successful_alerts': result['successful_alerts'],
+                'timestamp': datetime.now().isoformat(),
+                'alert_type': 'user_csv_alerts',
+                'session_id': session_id
+            }
+            
+            # Generate hash for URL sharing
+            metadata['hash'] = generate_result_hash(metadata)
+            metadata['share_url'] = f"#{metadata['hash']}"
+            
             search_results_store[session_id] = {
                 'results': result['results'],
-                'metadata': {
-                    'user': selected_user,
-                    'processed_alerts': result['processed_alerts'],
-                    'total_alerts': result['total_alerts'],
-                    'successful_alerts': result['successful_alerts'],
-                    'timestamp': datetime.now().isoformat(),
-                    'alert_type': 'user_csv_alerts'
-                },
+                'metadata': metadata,
                 'timestamp': datetime.now()
             }
             
@@ -3972,6 +4127,44 @@ def export_batch_html(user):
         return jsonify({
             'success': False,
             'error': f'Batch HTML export failed: {str(e)}'
+        }), 500
+
+@ome_blueprint.route('/global_history')
+def get_global_history_route():
+    """Get all recent alerts processed (both batch and single search)"""
+    try:
+        history = get_global_history()
+        
+        return jsonify({
+            'success': True,
+            'history': history,
+            'total_entries': len(history)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Failed to get global history: {str(e)}'
+        }), 500
+
+@ome_blueprint.route('/result_by_hash/<hash_id>')
+def get_result_by_hash_route(hash_id):
+    """Get result by hash ID for URL sharing"""
+    try:
+        result = get_result_by_hash(hash_id)
+        
+        if not result:
+            return jsonify({'error': 'Result not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'result': result
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Failed to get result: {str(e)}'
         }), 500
 
 @ome_blueprint.route('/batch_history/<user>')
