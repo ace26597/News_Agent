@@ -735,7 +735,7 @@ def process_csv_upload(csv_content: str) -> Dict[str, Any]:
         }
 
 def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], selected_user: str, start_date: datetime, end_date: datetime) -> Dict[str, Any]:
-    """Process alerts for a specific user with email_alert = 'yes' and relevance score > 65"""
+    """Process alerts for a specific user grouped by subheader column"""
     try:
         if selected_user not in user_email_alerts:
             return {
@@ -752,27 +752,51 @@ def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], sele
                 'results': []
             }
         
-        print(f"Processing {len(user_alert_rows)} alerts for user: {selected_user}")
+        # Group rows by subheader instead of processing row by row
+        subheader_groups = {}
+        for alert_row in user_alert_rows:
+            subheader = alert_row.get('subheader', 'Default').strip()
+            if subheader not in subheader_groups:
+                subheader_groups[subheader] = []
+            subheader_groups[subheader].append(alert_row)
+        
+        print(f"Processing {len(user_alert_rows)} rows grouped into {len(subheader_groups)} subheader alerts for user: {selected_user}")
         
         all_results = []
         processed_alerts = []
         
-        for alert_row in user_alert_rows:
-            # Combine aliases and keywords, make unique
+        # Process each subheader group as an alert
+        for subheader, alert_rows in subheader_groups.items():
+            # Combine all keywords from all rows in this subheader group
             all_keywords = []
-            if alert_row['aliases']:
-                all_keywords.extend([alias.strip() for alias in alert_row['aliases'].split(',') if alias.strip()])
-            if alert_row['keywords']:
-                all_keywords.extend([kw.strip() for kw in alert_row['keywords'].split(',') if kw.strip()])
+            primary_keywords = []  # Keywords from keyword column (higher priority)
+            alias_keywords = []    # Keywords from aliases column (lower priority)
             
-            # Remove duplicates and empty strings
+            # Get search type from first row (should be consistent within subheader)
+            search_type = alert_rows[0].get('search_type', 'standard')
+            alert_title = alert_rows[0].get('header', subheader)
+            
+            for alert_row in alert_rows:
+                # Prioritize keywords column over aliases column
+                if alert_row.get('keywords'):
+                    primary_keywords.extend([kw.strip() for kw in alert_row['keywords'].split(',') if kw.strip()])
+                if alert_row.get('aliases'):
+                    alias_keywords.extend([alias.strip() for alias in alert_row['aliases'].split(',') if alias.strip()])
+            
+            # Combine with priority: primary keywords first, then aliases
+            all_keywords = primary_keywords + alias_keywords
+            
+            # Remove duplicates while preserving order (primary keywords first)
             unique_keywords = list(dict.fromkeys([kw for kw in all_keywords if kw]))
             
             if not unique_keywords:
                 continue
                 
-            print(f"Processing alert: {alert_row['header']} - {alert_row['subheader']}")
-            print(f"Keywords: {unique_keywords}")
+            print(f"Processing subheader alert: {alert_title} - {subheader}")
+            print(f"Primary keywords: {primary_keywords}")
+            print(f"Alias keywords: {alias_keywords}")
+            print(f"Combined keywords: {unique_keywords}")
+            print(f"Search type: {search_type}")
             
             # Use agentic workflow if available
             if AGENT_AVAILABLE and pharma_agent:
@@ -781,55 +805,66 @@ def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], sele
                     keywords=unique_keywords,
                     start_date=start_date,
                     end_date=end_date,
-                    search_type=alert_row['search_type'],
-                    alert_title=alert_row['header'],
-                    alert_header=alert_row['subheader']
+                    search_type=search_type,
+                    alert_title=alert_title,
+                    alert_header=subheader,
+                    primary_keywords=primary_keywords,
+                    alias_keywords=alias_keywords
                 ))
                 
                 if workflow_result['success']:
                     # Use all LLM-scored results (no hardcoded filtering)
                     filtered_results = []
                     for result in workflow_result['results']:
-                        # Add alert context to result
+                        # Add alert context to result using first row for metadata
+                        first_row = alert_rows[0]
                         result['alert_context'] = {
-                            'user': alert_row['user'],
-                            'alert_title': alert_row['header'],
-                            'subheader': alert_row['subheader'],
-                            'email_subject': alert_row['email_subject'],
-                            'search_type': alert_row['search_type'],
-                            'source_select': alert_row['source_select'],
-                            'filter_type': alert_row['filter_type'],
-                            'include_links': alert_row['include_links']
+                            'user': selected_user,
+                            'alert_title': alert_title,
+                            'subheader': subheader,
+                            'email_subject': first_row.get('email_subject', ''),
+                            'search_type': search_type,
+                            'source_select': first_row.get('source_select', 'all'),
+                            'filter_type': first_row.get('filter_type', ''),
+                            'include_links': first_row.get('include_links', ''),
+                            'primary_keywords': primary_keywords,
+                            'alias_keywords': alias_keywords
                         }
                         filtered_results.append(result)
                     
                     if filtered_results:
                         all_results.extend(filtered_results)
                         processed_alerts.append({
-                            'alert_title': alert_row['header'],
-                            'subheader': alert_row['subheader'],
+                            'alert_title': alert_title,
+                            'subheader': subheader,
                             'keywords': unique_keywords,
+                            'primary_keywords': primary_keywords,
+                            'alias_keywords': alias_keywords,
                             'results_count': len(filtered_results),
-                            'email_subject': alert_row['email_subject']
+                            'email_subject': first_row.get('email_subject', ''),
+                            'search_type': search_type,
+                            'rows_processed': len(alert_rows)
                         })
                         
                         # Save HTML result for this alert
                         alert_data = {
-                            'header': alert_row['header'],
-                            'subheader': alert_row['subheader'],
+                            'header': alert_title,
+                            'subheader': subheader,
                             'keywords': unique_keywords,
-                            'user': selected_user
+                            'user': selected_user,
+                            'primary_keywords': primary_keywords,
+                            'alias_keywords': alias_keywords
                         }
                         timestamp = datetime.now()
                         html_file = save_batch_result_html(selected_user, alert_data, filtered_results, timestamp)
                         if html_file:
-                            print(f"Saved HTML result for alert '{alert_row['header']}': {html_file}")
+                            print(f"Saved HTML result for subheader alert '{subheader}': {html_file}")
                 else:
-                    print(f"Workflow failed for alert: {alert_row['header']}")
+                    print(f"Workflow failed for subheader alert: {subheader}")
             else:
                 # Fallback to basic search
                 raw_results = search_all_sources(unique_keywords, Config.MAX_RESULTS_PER_SOURCE, start_date, end_date)
-                filtered_results = filter_results(raw_results, unique_keywords, alert_row['search_type'])
+                filtered_results = filter_results(raw_results, unique_keywords, search_type)
                 
                 # Calculate relevance scores and filter by > 65
                 high_relevance_results = []
@@ -837,39 +872,48 @@ def process_user_alerts(user_email_alerts: Dict[str, List[Dict[str, Any]]], sele
                     relevance_score = calculate_relevance_score(result, unique_keywords)
                     if relevance_score > 65:
                         result['relevance_score'] = relevance_score
+                        first_row = alert_rows[0]
                         result['alert_context'] = {
-                            'user': alert_row['user'],
-                            'alert_title': alert_row['header'],
-                            'subheader': alert_row['subheader'],
-                            'email_subject': alert_row['email_subject'],
-                            'search_type': alert_row['search_type'],
-                            'source_select': alert_row['source_select'],
-                            'filter_type': alert_row['filter_type'],
-                            'include_links': alert_row['include_links']
+                            'user': selected_user,
+                            'alert_title': alert_title,
+                            'subheader': subheader,
+                            'email_subject': first_row.get('email_subject', ''),
+                            'search_type': search_type,
+                            'source_select': first_row.get('source_select', 'all'),
+                            'filter_type': first_row.get('filter_type', ''),
+                            'include_links': first_row.get('include_links', ''),
+                            'primary_keywords': primary_keywords,
+                            'alias_keywords': alias_keywords
                         }
                         high_relevance_results.append(result)
                 
                 if high_relevance_results:
                     all_results.extend(high_relevance_results)
                     processed_alerts.append({
-                        'alert_title': alert_row['header'],
-                        'subheader': alert_row['subheader'],
+                        'alert_title': alert_title,
+                        'subheader': subheader,
                         'keywords': unique_keywords,
+                        'primary_keywords': primary_keywords,
+                        'alias_keywords': alias_keywords,
                         'results_count': len(high_relevance_results),
-                        'email_subject': alert_row['email_subject']
+                        'email_subject': first_row.get('email_subject', ''),
+                        'search_type': search_type,
+                        'rows_processed': len(alert_rows)
                     })
                     
                     # Save HTML result for this alert
                     alert_data = {
-                        'header': alert_row['header'],
-                        'subheader': alert_row['subheader'],
+                        'header': alert_title,
+                        'subheader': subheader,
                         'keywords': unique_keywords,
-                        'user': selected_user
+                        'user': selected_user,
+                        'primary_keywords': primary_keywords,
+                        'alias_keywords': alias_keywords
                     }
                     timestamp = datetime.now()
                     html_file = save_batch_result_html(selected_user, alert_data, high_relevance_results, timestamp)
                     if html_file:
-                        print(f"Saved HTML result for alert '{alert_row['header']}': {html_file}")
+                        print(f"Saved HTML result for subheader alert '{subheader}': {html_file}")
         
         # Sort all results by relevance score
         all_results.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)

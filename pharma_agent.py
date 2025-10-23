@@ -1405,6 +1405,165 @@ class PharmaNewsAgent:
             logger.error(f"❌ NewsAPI search error: {str(e)}")
             return []
     
+    def generate_dynamic_queries(self, keywords: List[str], primary_keywords: List[str], 
+                               alias_keywords: List[str], subheader: str, alert_title: str, 
+                               search_type: str) -> Dict[str, List[str]]:
+        """Generate dynamic, thematic queries using LLM based on subheader and keywords"""
+        try:
+            from config import create_openai_client
+            openai_client = create_openai_client(self.config)
+            
+            # Create context for query generation
+            context = f"""
+ALERT CONTEXT:
+- Alert Title: {alert_title}
+- Subheader: {subheader}
+- Search Type: {search_type}
+- Primary Keywords (High Priority): {', '.join(primary_keywords)}
+- Alias Keywords (Secondary): {', '.join(alias_keywords)}
+- All Keywords: {', '.join(keywords)}
+
+DOMAIN: Pharmaceutical and Medical Research
+"""
+            
+            system_prompt = """You are an expert pharmaceutical research query generator. Your job is to create dynamic, thematic search queries that will find the most relevant content based on the alert context and keywords.
+
+Generate queries that are:
+1. Thematically relevant to the subheader and alert title
+2. Prioritize primary keywords over alias keywords
+3. Include domain-specific terminology
+4. Vary in specificity (broad to narrow)
+5. Consider different search intents (clinical, regulatory, market, research)
+
+Return ONLY a JSON object with this structure:
+{
+    "pubmed_queries": ["query1", "query2", "query3"],
+    "exa_queries": ["query1", "query2", "query3"],
+    "tavily_queries": ["query1", "query2", "query3"],
+    "newsapi_queries": ["query1", "query2", "query3"]
+}
+
+Each source should have 3 queries that are optimized for that platform's search capabilities."""
+            
+            user_prompt = f"""{context}
+
+TASK: Generate 3 optimized search queries for each source (PubMed, Exa, Tavily, NewsAPI) based on the alert context.
+
+QUERY GUIDELINES:
+- PubMed: Focus on clinical terms, drug names, medical conditions, research methodologies
+- Exa: Use neural-friendly queries with context and intent
+- Tavily: Include news and industry terminology
+- NewsAPI: Focus on recent news and market developments
+
+SEARCH TYPE CONSIDERATIONS:
+- If "standard": Use straightforward keyword combinations with OR operators
+- If "cooccurrence": Create queries that emphasize relationships between terms using AND operators and proximity
+- For cooccurrence: Use phrases like "A AND B", "A near B", "A together with B"
+
+Return ONLY the JSON object, no other text."""
+
+            response = openai_client.chat.completions.create(
+                model=self.config.get_model_name('main'),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            import json
+            try:
+                queries = json.loads(response_text)
+                
+                # Validate structure
+                expected_keys = ['pubmed_queries', 'exa_queries', 'tavily_queries', 'newsapi_queries']
+                for key in expected_keys:
+                    if key not in queries:
+                        queries[key] = []
+                    if not isinstance(queries[key], list):
+                        queries[key] = [str(queries[key])]
+                
+                logger.info(f"✅ Generated dynamic queries for subheader: {subheader}")
+                return queries
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse LLM query generation response: {e}")
+                return self._fallback_query_generation(keywords, primary_keywords, alias_keywords, search_type)
+                
+        except Exception as e:
+            logger.error(f"Dynamic query generation failed: {e}")
+            return self._fallback_query_generation(keywords, primary_keywords, alias_keywords, search_type)
+    
+    def _fallback_query_generation(self, keywords: List[str], primary_keywords: List[str], 
+                                 alias_keywords: List[str], search_type: str) -> Dict[str, List[str]]:
+        """Fallback query generation when LLM fails"""
+        # Create queries based on search type
+        if search_type.lower() == 'cooccurrence':
+            # For cooccurrence, use AND operators and proximity
+            primary_query = ' AND '.join([f'"{kw}"' for kw in primary_keywords[:3]])
+            alias_query = ' AND '.join([f'"{kw}"' for kw in alias_keywords[:2]]) if alias_keywords else ""
+            combined_query = f"({primary_query})" + (f" AND ({alias_query})" if alias_query else "")
+        else:
+            # For standard search, use OR operators
+            primary_query = ' OR '.join([f'"{kw}"' for kw in primary_keywords[:3]])
+            alias_query = ' OR '.join([f'"{kw}"' for kw in alias_keywords[:2]]) if alias_keywords else ""
+            combined_query = f"({primary_query})" + (f" AND ({alias_query})" if alias_query else "")
+        
+        # Generate source-specific queries based on search type
+        if search_type.lower() == 'cooccurrence':
+            queries = {
+                'pubmed_queries': [
+                    primary_query,
+                    combined_query,
+                    ' AND '.join(primary_keywords[:2])
+                ],
+                'exa_queries': [
+                    ' AND '.join(primary_keywords[:3]),
+                    f"{primary_keywords[0]} AND pharmaceutical research",
+                    combined_query
+                ],
+                'tavily_queries': [
+                    f"{primary_keywords[0]} AND pharma news",
+                    ' AND '.join(primary_keywords[:2]),
+                    combined_query
+                ],
+                'newsapi_queries': [
+                    f"{primary_keywords[0]} AND pharmaceutical",
+                    ' AND '.join(primary_keywords[:2]),
+                    combined_query
+                ]
+            }
+        else:
+            queries = {
+                'pubmed_queries': [
+                    primary_query,
+                    combined_query,
+                    ' OR '.join(primary_keywords[:2])
+                ],
+                'exa_queries': [
+                    ' OR '.join(primary_keywords[:3]),
+                    f"{primary_keywords[0]} pharmaceutical research",
+                    combined_query
+                ],
+                'tavily_queries': [
+                    f"{primary_keywords[0]} pharma news",
+                    ' OR '.join(primary_keywords[:2]),
+                    combined_query
+                ],
+                'newsapi_queries': [
+                    f"{primary_keywords[0]} pharmaceutical",
+                    ' OR '.join(primary_keywords[:2]),
+                    combined_query
+                ]
+            }
+        
+        return queries
+    
     def _extract_source_name(self, url: str) -> str:
         """Extract source name from URL"""
         try:

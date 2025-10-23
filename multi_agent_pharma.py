@@ -567,7 +567,8 @@ class MultiAgentPharmaAgent:
     async def execute_workflow(self, keywords: List[str], start_date: datetime, 
                              end_date: datetime, search_type: str = 'standard',
                              search_engines: List[str] = None, alert_title: str = None, 
-                             alert_header: str = None) -> Dict[str, Any]:
+                             alert_header: str = None, primary_keywords: List[str] = None,
+                             alias_keywords: List[str] = None) -> Dict[str, Any]:
         """Execute the complete multi-agent workflow"""
         
         if search_engines is None:
@@ -592,8 +593,39 @@ class MultiAgentPharmaAgent:
         }
         
         try:
-            # Step 1: Collect raw data
-            logger.info("📡 Step 1: Collecting data from multiple sources...")
+            # Step 1: Generate dynamic queries based on alert context
+            logger.info("🤖 Step 1: Generating dynamic queries based on alert context...")
+            print("🤖 DYNAMIC QUERY GENERATION: Creating thematic queries...")
+            
+            # Use provided primary and alias keywords, or fallback to splitting keywords
+            if primary_keywords is None or alias_keywords is None:
+                # Fallback: split keywords if not provided
+                mid_point = len(keywords) // 2
+                primary_keywords = primary_keywords or (keywords[:mid_point] if mid_point > 0 else keywords[:len(keywords)//2+1])
+                alias_keywords = alias_keywords or (keywords[mid_point:] if mid_point > 0 else [])
+            
+            # Generate dynamic queries using LLM
+            dynamic_queries = self.data_collector.generate_dynamic_queries(
+                keywords=keywords,
+                primary_keywords=primary_keywords,
+                alias_keywords=alias_keywords,
+                subheader=alert_header or "General Search",
+                alert_title=alert_title or "Pharma Research",
+                search_type=search_type
+            )
+            
+            print(f"✅ DYNAMIC QUERIES GENERATED:")
+            for source, queries in dynamic_queries.items():
+                print(f"   - {source}: {len(queries)} queries")
+            
+            workflow_results['metadata']['workflow_stats']['dynamic_queries'] = {
+                'primary_keywords': primary_keywords,
+                'alias_keywords': alias_keywords,
+                'queries_generated': {source: len(queries) for source, queries in dynamic_queries.items()}
+            }
+            
+            # Step 2: Collect raw data using dynamic queries
+            logger.info("📡 Step 2: Collecting data from multiple sources with dynamic queries...")
             print("🔍 AGENT WORKFLOW: Starting data collection from APIs...")
             print(f"   - Keywords: {keywords}")
             print(f"   - Sources: {search_engines}")
