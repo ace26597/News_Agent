@@ -14,6 +14,12 @@ from dataclasses import dataclass
 
 from config import Config, create_openai_client
 from difflib import SequenceMatcher
+from alert_metadata_tracker import (
+    AlertMetadata, 
+    RetrieverMetrics, 
+    RetrieverStrategyMetrics,
+    get_tracker
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -821,9 +827,190 @@ class MultiAgentPharmaAgent:
             logger.info(f"✅ Multi-Agent workflow complete: {len(results)} final results")
             print(f"\n🎉 WORKFLOW COMPLETE: {len(results)} high-quality articles with scores and highlights!")
             
+            # Step 8: Log metadata for analysis
+            logger.info("📝 Step 8: Logging alert metadata...")
+            self._log_alert_metadata(
+                workflow_results=workflow_results,
+                keywords=keywords,
+                primary_keywords=primary_keywords,
+                alias_keywords=alias_keywords,
+                start_date=start_date,
+                end_date=end_date,
+                search_type=search_type,
+                alert_title=alert_title,
+                alert_header=alert_header,
+                raw_data=raw_data,
+                raw_articles=raw_articles,
+                dedup_stats=dedup_stats,
+                date_stats=date_stats,
+                date_filter_stats=date_filter_stats,
+                relevance_stats=relevance_stats,
+                sorted_articles=sorted_articles
+            )
+            
         except Exception as e:
             logger.error(f"Workflow failed: {e}")
             workflow_results['success'] = False
             workflow_results['error'] = str(e)
+            
+            # Log metadata even on failure
+            try:
+                self._log_alert_metadata(
+                    workflow_results=workflow_results,
+                    keywords=keywords,
+                    primary_keywords=primary_keywords or [],
+                    alias_keywords=alias_keywords or [],
+                    start_date=start_date,
+                    end_date=end_date,
+                    search_type=search_type,
+                    alert_title=alert_title,
+                    alert_header=alert_header,
+                    raw_data={},
+                    raw_articles=[],
+                    dedup_stats={},
+                    date_stats={},
+                    date_filter_stats={},
+                    relevance_stats={},
+                    sorted_articles=[]
+                )
+            except Exception as log_error:
+                logger.error(f"Failed to log metadata on error: {log_error}")
         
         return workflow_results
+    
+    def _log_alert_metadata(self, workflow_results: Dict[str, Any], keywords: List[str],
+                           primary_keywords: List[str], alias_keywords: List[str],
+                           start_date: datetime, end_date: datetime, search_type: str,
+                           alert_title: str, alert_header: str, raw_data: Dict[str, List[Dict[str, Any]]],
+                           raw_articles: List[Dict[str, Any]], dedup_stats: Dict[str, Any],
+                           date_stats: Dict[str, Any], date_filter_stats: Dict[str, Any],
+                           relevance_stats: Dict[str, Any], sorted_articles: List[Any]):
+        """Log comprehensive metadata about the alert execution"""
+        try:
+            # Generate unique alert ID
+            alert_id = f"{alert_title or 'alert'}_{alert_header or 'search'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Calculate article type breakdown
+            article_types = {}
+            for article in sorted_articles:
+                article_type = article.article_type or 'unknown'
+                article_types[article_type] = article_types.get(article_type, 0) + 1
+            
+            # Calculate relevance breakdown
+            articles_high = sum(1 for a in sorted_articles if a.relevance_score and a.relevance_score >= 80)
+            articles_medium = sum(1 for a in sorted_articles if a.relevance_score and 60 <= a.relevance_score < 80)
+            articles_low = sum(1 for a in sorted_articles if a.relevance_score and a.relevance_score < 60)
+            
+            # Calculate average relevance
+            relevance_scores = [a.relevance_score for a in sorted_articles if a.relevance_score is not None]
+            avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+            
+            # Build retriever metrics
+            retriever_metrics_dict = {}
+            for source_name, source_articles in raw_data.items():
+                # Count articles from this source in final results
+                source_final_kept = sum(1 for a in sorted_articles if a.source.lower() == source_name.lower())
+                
+                # Calculate relevance for this source
+                source_relevance_scores = [
+                    a.relevance_score for a in sorted_articles 
+                    if a.source.lower() == source_name.lower() and a.relevance_score is not None
+                ]
+                source_avg_relevance = (
+                    sum(source_relevance_scores) / len(source_relevance_scores)
+                    if source_relevance_scores else 0.0
+                )
+                
+                # Create retriever metrics
+                retriever_metrics_dict[source_name.lower()] = RetrieverMetrics(
+                    retriever_name=source_name.lower(),
+                    total_articles_retrieved=len(source_articles),
+                    strategies_used=['default'],  # TODO: Track actual strategies used
+                    articles_final_kept=source_final_kept,
+                    avg_relevance_score=source_avg_relevance,
+                    execution_time_seconds=0.0  # TODO: Track timing per retriever
+                )
+            
+            # Get query generation info
+            dynamic_queries_info = workflow_results['metadata']['workflow_stats'].get('dynamic_queries', {})
+            
+            # Create AlertMetadata object
+            metadata = AlertMetadata(
+                # Alert identification
+                alert_id=alert_id,
+                alert_name=alert_title or "Pharma Research",
+                subheader=alert_header or "General Search",
+                alert_type="single",  # Will be overridden by batch processing
+                user="system",  # Will be overridden by batch processing
+                
+                # Keywords
+                primary_keywords=primary_keywords,
+                alias_keywords=alias_keywords,
+                all_keywords=keywords,
+                search_type=search_type,
+                
+                # Date range
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                
+                # Retrievers
+                retrievers_used=list(raw_data.keys()),
+                retriever_metrics=retriever_metrics_dict,
+                
+                # Overall statistics
+                total_articles_collected=len(raw_articles),
+                total_unique_articles_after_dedup=dedup_stats.get('unique_articles', 0),
+                total_duplicates_removed=dedup_stats.get('duplicates_removed', 0),
+                duplicate_groups_found=dedup_stats.get('duplicate_groups', 0),
+                
+                # Date extraction
+                articles_with_original_dates=date_stats.get('with_dates', 0),
+                articles_with_extracted_dates=date_stats.get('extracted_dates', 0),
+                articles_without_dates=date_stats.get('without_dates', 0),
+                llm_date_extraction_success_rate=(
+                    (date_stats.get('extracted_dates', 0) / len(raw_articles) * 100)
+                    if raw_articles else 0.0
+                ),
+                
+                # Date filtering
+                articles_in_date_range=date_filter_stats.get('in_range', 0),
+                articles_out_of_date_range=date_filter_stats.get('out_of_range', 0),
+                articles_rescued_by_llm_date=date_filter_stats.get('llm_rescued', 0),
+                
+                # Relevance
+                articles_analyzed_for_relevance=relevance_stats.get('analyzed', 0),
+                articles_relevance_high=articles_high,
+                articles_relevance_medium=articles_medium,
+                articles_relevance_low=articles_low,
+                articles_final_kept=len(sorted_articles),
+                avg_relevance_score=avg_relevance,
+                
+                # Article types
+                article_types=article_types,
+                
+                # Query generation
+                dynamic_queries_generated=bool(dynamic_queries_info),
+                queries_per_source=dynamic_queries_info.get('queries_generated', {}),
+                
+                # Performance - extract from workflow_stats if available
+                total_execution_time_seconds=0.0,  # TODO: Calculate from start/end time
+                
+                # Success
+                workflow_successful=workflow_results.get('success', False),
+                errors_encountered=[workflow_results.get('error')] if workflow_results.get('error') else []
+            )
+            
+            # Log to CSV
+            tracker = get_tracker()
+            success = tracker.log_alert_metadata(metadata)
+            
+            if success:
+                logger.info(f"✅ Alert metadata logged successfully: {alert_id}")
+                print(f"📝 METADATA LOGGED: {alert_id}")
+            else:
+                logger.warning("⚠️ Failed to log alert metadata")
+                
+        except Exception as e:
+            logger.error(f"Error logging alert metadata: {e}")
+            import traceback
+            traceback.print_exc()

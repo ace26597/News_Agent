@@ -26,6 +26,7 @@ from flask import Blueprint, render_template_string, request, jsonify, send_file
 try:
     from multi_agent_pharma import MultiAgentPharmaAgent
     from config import Config
+    from alert_metadata_tracker import AlertMetadata, get_tracker
     AGENT_AVAILABLE = True
     MULTI_AGENT_AVAILABLE = True
 except ImportError as e:
